@@ -252,7 +252,6 @@ BuildRequires:  %{luarocks_package_name}
 %if 0%{with make_check}
 BuildRequires:  jq
 BuildRequires:	libuuid-devel
-BuildRequires:	ninja-build
 BuildRequires:	python%{python3_pkgversion}-bcrypt
 BuildRequires:	python%{python3_pkgversion}-nose
 BuildRequires:	python%{python3_pkgversion}-pecan
@@ -308,6 +307,7 @@ BuildRequires:  gcc-toolset-9-libatomic-devel
 # distro-conditional dependencies
 #################################################################################
 %if 0%{?suse_version}
+BuildRequires:  ninja
 BuildRequires:  pkgconfig(systemd)
 BuildRequires:	systemd-rpm-macros
 %{?systemd_requires}
@@ -336,6 +336,7 @@ BuildRequires:  golang-github-prometheus-prometheus
 %if 0%{?fedora} || 0%{?rhel}
 Requires:	systemd
 BuildRequires:  boost-random
+BuildRequires:	ninja-build
 BuildRequires:	nss-devel
 BuildRequires:	keyutils-libs-devel
 BuildRequires:	libibverbs-devel
@@ -1242,6 +1243,7 @@ env | sort
 mkdir -p %{_vpath_builddir}
 pushd %{_vpath_builddir}
 cmake .. \
+    -GNinja \
     -DCMAKE_INSTALL_PREFIX=%{_prefix} \
     -DCMAKE_INSTALL_LIBDIR:PATH=%{_libdir} \
     -DCMAKE_INSTALL_LIBEXECDIR:PATH=%{_libexecdir} \
@@ -1323,9 +1325,9 @@ cat ./CMakeFiles/CMakeError.log
 %endif
 
 %if 0%{?suse_version}
-make %{_smp_mflags}
+ninja %{_smp_mflags}
 %else
-%make_build
+%ninja_build
 %endif
 
 popd
@@ -1341,7 +1343,7 @@ popd
 
 %install
 pushd %{_vpath_builddir}
-%make_install
+%ninja_install
 # we have dropped sysvinit bits
 rm -f %{buildroot}/%{_sysconfdir}/init.d/ceph
 popd
