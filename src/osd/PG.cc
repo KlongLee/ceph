@@ -1129,7 +1129,7 @@ void PG::clear_primary_state()
 }
 
 PG::Scrubber::Scrubber()
- : local_reserved(false), remote_reserved(false), reserve_failed(false),
+ : local_reserved(false), remote_reserved(false), reserve_reject(false),
    epoch_start(0),
    active(false),
    shallow_errors(0), deep_errors(0), fixed(0),
@@ -1138,6 +1138,7 @@ PG::Scrubber::Scrubber()
    auto_repair(false),
    check_repair(false),
    deep_scrub_on_error(false),
+   reserve_failed(false),
    num_digest_updates_pending(0),
    state(INACTIVE),
    deep(false)
@@ -4511,15 +4512,17 @@ bool PG::sched_scrub()
       scrub_reserve_replicas();
     } else {
       dout(20) << __func__ << ": failed to reserve locally" << dendl;
+      set_reserve_failed();
       return false;
     }
   }
 
   if (scrubber.local_reserved) {
-    if (scrubber.reserve_failed) {
+    if (scrubber.reserve_reject) {
       dout(20) << __func__ << ": failed, a peer declined" << dendl;
       clear_scrub_reserved();
       scrub_unreserve_replicas();
+      set_reserve_failed();
       return false;
     } else if (scrubber.reserved_peers.size() == actingset.size()) {
       dout(20) << __func__ << ": success, reserved self and replicas" << dendl;
@@ -4721,7 +4724,7 @@ void PG::handle_scrub_reserve_reject(OpRequestRef op, pg_shard_t from)
   } else {
     /* One decline stops this pg from being scheduled for scrubbing. */
     dout(10) << " osd." << from << " scrub reserve = fail" << dendl;
-    scrubber.reserve_failed = true;
+    scrubber.reserve_reject = true;
     sched_scrub();
   }
 }
@@ -4784,7 +4787,7 @@ void PG::schedule_recovery_retry(float delay)
 void PG::clear_scrub_reserved()
 {
   scrubber.reserved_peers.clear();
-  scrubber.reserve_failed = false;
+  scrubber.reserve_reject = false;
 
   if (scrubber.local_reserved) {
     scrubber.local_reserved = false;
@@ -5187,8 +5190,7 @@ void PG::replica_scrub(
 void PG::scrub(epoch_t queued, ThreadPool::TPHandle &handle)
 {
   if (cct->_conf->osd_scrub_sleep > 0 &&
-      (scrubber.state == PG::Scrubber::NEW_CHUNK ||
-       scrubber.state == PG::Scrubber::INACTIVE) &&
+      scrubber.state == PG::Scrubber::NEW_CHUNK &&
        scrubber.needs_sleep) {
     ceph_assert(!scrubber.sleeping);
     dout(20) << __func__ << " state is INACTIVE|NEW_CHUNK, sleeping" << dendl;
