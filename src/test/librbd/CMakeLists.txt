@@ -157,7 +157,7 @@ endif()
 # turn requires libos and libosd, however those libraries haven't been ported to
 # Windows.
 if(NOT WIN32)
-if(LINUX AND HAVE_LIBNBD-DEV)
+if(LINUX AND HAVE_LIBNBD)
   list(APPEND unittest_librbd_srcs
           migration/test_mock_NBDStream.cc)
 endif()
