@@ -72,7 +72,6 @@ struct NBDStream<I>::ReadRequest {
   void read() {
     auto cct = nbd_stream->m_cct;  
     struct nbd_handle *nbd = nbd_stream->nbd;
-    int64_t cookies[byte_extents.size()];
     int rc=0;
 
     ldout(cct, 20) << "byte_extents=" << byte_extents << dendl;
@@ -84,41 +83,17 @@ struct NBDStream<I>::ReadRequest {
         byte_length));
       auto buffer = boost::asio::mutable_buffer(ptr->c_str(), byte_length);
       data->push_back(std::move(ptr));
-      cookies[extent] = nbd_aio_pread(nbd, boost::asio::buffer_cast<void *>(buffer),
-        byte_length, byte_offset, NBD_NULL_COMPLETION, 0);
-      if(cookies[extent] == -1) {
+      rc = nbd_pread(nbd, boost::asio::buffer_cast<void *>(buffer),
+        byte_length, byte_offset, 0);
+      if(rc == -1) {
         rc = nbd_get_errno();
-        lderr(cct) << "nbd_aio_pread: " << nbd_get_error()
-                   << " (errno=" << rc << ")" <<  dendl;
+        lderr(cct) << "nbd_pread: " << nbd_get_error()
+                   << " (errno=" << rc << ")" 
+                   <<  byte_offset << " " << byte_length << dendl;
         on_finish->complete(rc);
         return;
       }
       extent++;
-    }
-
-    extent--;
-    while (extent >= 0) {
-      ldout(cct, 20) << "extent=" << extent << dendl;
-      rc = nbd_aio_command_completed(nbd, cookies[extent]); 
-      if (rc == -1) {
-        rc = nbd_get_errno();
-        lderr(cct) << "nbd_aio_command_completed: " << nbd_get_error()
-                   << " (errno=" << rc << ")" <<  dendl;
-        on_finish->complete(rc);
-        return;
-      }
-      else if (rc == 0) {
-	rc = nbd_poll(nbd, -1);
-        if (rc == -1) {
-          rc = nbd_get_errno();
-          lderr(cct) << "nbd_poll: " << nbd_get_error()
-                     << " (errno=" << rc << ")" <<  dendl;
-          on_finish->complete(rc);
-          return;
-        }      
-      } else {
-	extent--;
-      }
     }
 
     finish(0);
@@ -159,49 +134,28 @@ struct NBDStream<I>::ListRequest {
   void list() {
     auto cct = nbd_stream->m_cct;  
     struct nbd_handle *nbd = nbd_stream->nbd;
-    int64_t cookies[byte_extents.size()];
     int rc=0;
 
     ldout(cct, 20) << dendl;
     int extent = 0;
+    unsigned int size = nbd_get_size(nbd);
     for (auto& [byte_offset, byte_length] : byte_extents) {
-      cookies[extent] = nbd_aio_block_status(nbd, byte_length, byte_offset,
+      if (byte_offset+byte_length > size) {
+        // avoid getting request out of bounds warning
+        byte_length = size - byte_offset;
+      }
+      rc = nbd_block_status(nbd, byte_length, byte_offset,
         (nbd_extent_callback) { .callback=check_extent,
-                                .user_data=sparse_extents },
-        NBD_NULL_COMPLETION, 0);
-      if (cookies[extent] == -1) {
+                                .user_data=sparse_extents }, 0);
+      if (rc == -1) {
         rc = nbd_get_errno();
-        lderr(cct) << "nbd_aio_block_status: " << nbd_get_error()
-                   << " (errno=" << rc << ")" <<  dendl;
+        lderr(cct) << "nbd_block_status: " << nbd_get_error()
+                   << " (errno=" << rc << ")" 
+                   << byte_offset << " " << byte_length << dendl;
         on_finish->complete(rc);
         return;
       }
       extent++;
-    }
-
-    extent--;
-    while (extent >= 0) {
-      ldout(cct, 20) << "extent=" << extent << dendl;
-      rc = nbd_aio_command_completed(nbd, cookies[extent]); 
-      if (rc == -1) {
-        rc = nbd_get_errno();
-        lderr(cct) << "nbd_aio_command_completed: " << nbd_get_error()
-                   << " (errno=" << rc << ")" <<  dendl;
-        on_finish->complete(rc);
-        return;
-      }
-      else if (rc == 0) {
-	rc = nbd_poll(nbd, -1);
-        if (rc == -1) {
-          rc = nbd_get_errno();
-          lderr(cct) << "nbd_poll: " << nbd_get_error()
-                     << " (errno=" << rc << ")" <<  dendl;
-          on_finish->complete(rc);
-          return;
-        }      
-      } else {
-	extent--;
-      }
     }
 
     finish(0);
