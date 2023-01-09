@@ -135,9 +135,15 @@ public:
     explicit Crashed();
   };
 
-  struct Cancelled : sc::simple_state<Cancelled, BackfillMachine>,
-		     StateHelper<Cancelled> {
-    explicit Cancelled();
+  struct Cancelled : sc::state<Cancelled, BackfillMachine>,
+                     StateHelper<Cancelled> {
+    using reactions = boost::mpl::list<
+      sc::custom_reaction<Triggered>,
+      sc::transition<sc::event_base, Crashed>>;
+    explicit Cancelled(my_context);
+    // resume after triggering backfill by on_activate_complete().
+    // transit to Enqueuing.
+    sc::result react(const Triggered&);
   };
 
   struct Initial : sc::state<Initial, BackfillMachine>,
@@ -159,6 +165,8 @@ public:
       sc::transition<RequestPrimaryScanning, PrimaryScanning>,
       sc::transition<RequestReplicasScanning, ReplicasScanning>,
       sc::transition<RequestWaiting, Waiting>,
+      sc::transition<RequestDone, Done>,
+      sc::transition<CancelBackfill, Cancelled>,
       sc::transition<sc::event_base, Crashed>>;
     explicit Enqueuing(my_context);
 
@@ -229,14 +237,15 @@ public:
     using reactions = boost::mpl::list<
       sc::custom_reaction<ObjectPushed>,
       sc::custom_reaction<ReplicaScanned>,
+      sc::custom_reaction<CancelBackfill>,
       sc::transition<RequestDone, Done>,
-      sc::transition<CancelBackfill, Cancelled>,
       sc::transition<sc::event_base, Crashed>>;
     explicit ReplicasScanning(my_context);
     // collect scanning result; if all results are collected, transition
     // to Enqueuing will happen.
     sc::result react(ObjectPushed);
     sc::result react(ReplicaScanned);
+    sc::result react(CancelBackfill);
 
     // indicate whether a particular peer should be scanned to retrieve
     // BackfillInterval for new range of hobject_t namespace.
