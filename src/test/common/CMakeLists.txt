@@ -372,6 +372,7 @@ add_executable(unittest_async_shared_mutex test_async_shared_mutex.cc)
 add_ceph_unittest(unittest_async_shared_mutex)
 target_link_libraries(unittest_async_shared_mutex ceph-common Boost::system)
 
+
 add_executable(unittest_async_spawn_throttle test_async_spawn_throttle.cc)
 add_ceph_unittest(unittest_async_spawn_throttle)
 target_link_libraries(unittest_async_spawn_throttle ceph-common Boost::system Boost::context)
@@ -379,6 +380,10 @@ target_link_libraries(unittest_async_spawn_throttle ceph-common Boost::system Bo
 add_executable(unittest_async_yield_waiter test_async_yield_waiter.cc)
 add_ceph_unittest(unittest_async_yield_waiter)
 target_link_libraries(unittest_async_yield_waiter ceph-common Boost::system Boost::context)
+
+add_executable(unittest_async_spawn_group test_async_spawn_group.cc)
+add_ceph_unittest(unittest_async_spawn_group)
+target_link_libraries(unittest_async_spawn_group ceph-common Boost::system)
 
 add_executable(unittest_cdc test_cdc.cc
   $<TARGET_OBJECTS:unit-main>)
