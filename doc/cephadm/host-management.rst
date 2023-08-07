@@ -286,8 +286,8 @@ create a new CRUSH host located in the specified hierarchy.
 
 .. note:: 
 
-  The ``location`` attribute will be only affect the initial CRUSH location. Subsequent
-  changes of the ``location`` property will be ignored. Also, removing a host will no remove
+  The ``location`` attribute will only affect the initial CRUSH location. Subsequent
+  changes of the ``location`` property will be ignored. Also, removing a host will not remove
   any CRUSH buckets.
 
 See also :ref:`crush_map_default_types`.
