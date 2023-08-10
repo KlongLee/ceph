@@ -22,6 +22,11 @@ def create_parser(prog, description):
         action='store_true',
         help='Use BlueStore backend')
     parser.add_argument(
+        '--bluestore-rdr',
+        action='store_true',
+        help='Use the bluestore-rdr objectstore. (Experimental).',
+    )
+    parser.add_argument(
         '--crush-device-class',
         dest='crush_device_class',
         help='Crush device class to assign this OSD to',
@@ -48,5 +53,11 @@ def create_parser(prog, description):
         '--dmcrypt',
         action='store_true',
         help='Enable device encryption via dm-crypt',
+    )
+    parser.add_argument(
+        '--osd-id',
+        help='Reuse an existing OSD id',
+        default=None,
+        type=arg_validators.valid_osd_id,
     )
     return parser

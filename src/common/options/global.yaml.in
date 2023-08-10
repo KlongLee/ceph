@@ -3728,6 +3728,7 @@ options:
   default: bluestore
   enum_values:
   - bluestore
+  - bluestore-rdr
   - filestore
   - memstore
   - kstore
@@ -5257,11 +5258,6 @@ options:
   type: float
   level: dev
   default: 0
-  with_legacy: true
-- name: bluestore_debug_inject_bug21040
-  type: bool
-  level: dev
-  default: false
   with_legacy: true
 - name: bluestore_debug_inject_csum_err_probability
   type: float
