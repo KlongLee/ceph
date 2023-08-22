@@ -127,6 +127,10 @@ MEV(SchedReplica)
 /// that is in-flight to the local ObjectStore
 MEV(ReplicaPushesUpd)
 
+/// triggering possible ops to re-instate the sched-target invariants
+/// (does not handle scrub-job related invariants)
+MEV(NewIntervalReset)
+
 /// guarantee that the FSM is in the quiescent state (i.e. NotActive)
 MEV(FullReset)
 
@@ -197,7 +201,7 @@ public:
    * from being delivered.  The intended usage is to invoke
    * schedule_timer_event_after in the constructor of the state machine state
    * intended to handle the event and assign the returned timer_event_token_t
-   * to a member of that state. That way, exiting the state will implicitely
+   * to a member of that state. That way, exiting the state will implicitly
    * cancel the event.  See RangedBlocked::m_timeout_token and
    * RangeBlockedAlarm for an example usage.
    */
@@ -259,7 +263,7 @@ public:
    * schedule_timer_event_after
    *
    * Schedules event EventT{Args...} to be delivered duration in the future.
-   * The implementation implicitely drops the event on interval change.  The
+   * The implementation implicitly drops the event on interval change.  The
    * returned timer_event_token_t can be used to cancel the event prior to
    * its delivery -- it should generally be embedded as a member in the state
    * intended to handle the event.  See the comment on timer_event_token_t
@@ -321,6 +325,7 @@ struct ReservingReplicas : sc::state<ReservingReplicas, ScrubMachine>,
   using reactions = mpl::list<sc::custom_reaction<FullReset>,
 			      // all replicas granted our resources request
 			      sc::transition<RemotesReserved, ActiveScrubbing>,
+			      sc::custom_reaction<NewIntervalReset>,
 			      sc::custom_reaction<ReservationTimeout>,
 			      sc::custom_reaction<ReservationFailure>>;
 
@@ -329,7 +334,7 @@ struct ReservingReplicas : sc::state<ReservingReplicas, ScrubMachine>,
   ScrubMachine::timer_event_token_t m_timeout_token;
 
   sc::result react(const FullReset&);
-
+  sc::result react(const NewIntervalReset&);
   sc::result react(const ReservationTimeout&);
 
   /// at least one replica denied us the scrub resources we've requested
@@ -367,9 +372,11 @@ struct ActiveScrubbing
   ~ActiveScrubbing();
 
   using reactions = mpl::list<sc::custom_reaction<InternalError>,
+			      sc::custom_reaction<NewIntervalReset>,
 			      sc::custom_reaction<FullReset>>;
 
   sc::result react(const FullReset&);
+  sc::result react(const NewIntervalReset&);
   sc::result react(const InternalError&);
 };
 
@@ -459,7 +466,7 @@ struct BuildMap : sc::state<BuildMap, ActiveScrubbing>, NamedSimply {
   // - if preempted, we switch to DrainReplMaps, where we will wait for all
   //   replicas to send their maps before acknowledging the preemption;
   // - an interval change will be handled by the relevant 'send-event'
-  //   functions, and will translated into a 'FullReset' event.
+  //   functions, and will be translated into a 'FullReset' event.
   using reactions = mpl::list<sc::transition<IntBmPreempted, DrainReplMaps>,
 			      // looping, waiting for the backend to finish:
 			      sc::transition<InternalSchedScrub, BuildMap>,
