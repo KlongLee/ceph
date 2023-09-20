@@ -2235,6 +2235,31 @@ public:
     if (ret < 0)
       return ret;
 
+    map<string, bufferlist> attrs_m;
+    RGWBucketInfo bi;
+
+    ret = ctl.bucket->read_bucket_instance_info(be.bucket, &bi, y, dpp, RGWBucketCtl::BucketInstance::GetParams()
+                                                                    .set_mtime(&orig_mtime)
+                                                                    .set_attrs(&attrs_m));
+    if (ret < 0) {
+        return ret;
+    }
+
+    if (bi.deleted) {
+      bi.layout.logs.push_back(rgw::log_layout_from_deleted_index(0, bi.layout.current_index));
+    }
+
+
+    ret = ctl.bucket->store_bucket_instance_info(be.bucket, bi, y, dpp, RGWBucketCtl::BucketInstance::PutParams()
+                                                                    .set_exclusive(false)
+                                                                    .set_mtime(orig_mtime)
+                                                                    .set_attrs(&attrs_m)
+                                                                    .set_orig_info(&bi));
+    if (ret < 0) {
+      ldpp_dout(dpp, 0) << "ERROR: failed to put new bucket instance info for bucket=" << bi.bucket << " ret=" << ret << dendl;
+      return ret;
+    }
+
     /*
      * We're unlinking the bucket but we don't want to update the entrypoint here - we're removing
      * it immediately and don't want to invalidate our cached objv_version or the bucket obj removal
