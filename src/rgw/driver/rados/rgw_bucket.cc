@@ -2235,31 +2235,6 @@ public:
     if (ret < 0)
       return ret;
 
-    map<string, bufferlist> attrs_m;
-    RGWBucketInfo bi;
-
-    ret = ctl.bucket->read_bucket_instance_info(be.bucket, &bi, y, dpp, RGWBucketCtl::BucketInstance::GetParams()
-                                                                    .set_mtime(&orig_mtime)
-                                                                    .set_attrs(&attrs_m));
-    if (ret < 0) {
-        return ret;
-    }
-
-    if (bi.deleted) {
-      bi.layout.logs.push_back(rgw::log_layout_from_deleted_index(0, bi.layout.current_index));
-    }
-
-
-    ret = ctl.bucket->store_bucket_instance_info(be.bucket, bi, y, dpp, RGWBucketCtl::BucketInstance::PutParams()
-                                                                    .set_exclusive(false)
-                                                                    .set_mtime(orig_mtime)
-                                                                    .set_attrs(&attrs_m)
-                                                                    .set_orig_info(&bi));
-    if (ret < 0) {
-      ldpp_dout(dpp, 0) << "ERROR: failed to put new bucket instance info for bucket=" << bi.bucket << " ret=" << ret << dendl;
-      return ret;
-    }
-
     /*
      * We're unlinking the bucket but we don't want to update the entrypoint here - we're removing
      * it immediately and don't want to invalidate our cached objv_version or the bucket obj removal
@@ -2773,12 +2748,31 @@ public:
   int do_remove(RGWSI_MetaBackend_Handler::Op *op, string& entry, RGWObjVersionTracker& objv_tracker,
                 optional_yield y, const DoutPrefixProvider *dpp) override {
     RGWBucketCompleteInfo bci;
+    real_time mtime;
 
     RGWSI_Bucket_BI_Ctx ctx(op->ctx());
 
     int ret = read_bucket_instance_entry(ctx, entry, &bci, nullptr, y, dpp);
-    if (ret < 0 && ret != -ENOENT)
+    if (ret < 0 && ret != -ENOENT) {
       return ret;
+    }
+
+    const auto& log = bci.info.layout.logs.back();
+    ldpp_dout(dpp, 10) << "deleted: " << bci.info.deleted << dendl;
+    if (bci.info.deleted && log.layout.type != rgw::BucketLogType::Deleted) {
+      bci.info.layout.logs.push_back(rgw::log_layout_from_deleted_index(0, bci.info.layout.current_index));
+    }
+
+    ret = svc.bucket->store_bucket_instance_info(ctx,
+                                                 RGWSI_Bucket::get_bi_meta_key(bci.info.bucket),
+                                                 bci.info,
+                                                 nullptr,
+                                                 false,
+                                                 mtime, &bci.attrs, y, dpp);
+    if (ret < 0) {
+      ldpp_dout(dpp, 0) << "ERROR: failed to store bucket instance info for bucket=" << bci.info.bucket << " ret=" << ret << dendl;
+      return ret;
+    }
 
     ret = svc.bucket->remove_bucket_instance_info(
         ctx, entry, bci.info, &bci.info.objv_tracker, y, dpp);
