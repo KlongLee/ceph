@@ -935,7 +935,7 @@ class LocalMDSCluster(LocalCephCluster, tasks.cephfs.filesystem.MDSClusterBase):
         pass
 
     def newfs(self, name=None, create=True, **kwargs):
-        name = self.gen_fsname() if name is None else name
+        name = filesystem.gen_fsname() if name is None else name
         return LocalFilesystem(self._ctx, name=name, create=create, **kwargs)
 
     def delete_all_filesystems(self):
