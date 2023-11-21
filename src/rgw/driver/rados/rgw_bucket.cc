@@ -2758,8 +2758,8 @@ public:
     }
 
     const auto& log = bci.info.layout.logs.back();
-    ldpp_dout(dpp, 10) << "deleted: " << bci.info.deleted << dendl;
-    if (bci.info.deleted && log.layout.type != rgw::BucketLogType::Deleted) {
+//    ldpp_dout(dpp, 10) << "deleted: " << bci.info.bucket_deleted() << dendl;
+    if (bci.info.bucket_deleted() && log.layout.type != rgw::BucketLogType::Deleted) {
       bci.info.layout.logs.push_back(rgw::log_layout_from_deleted_index(0, bci.info.layout.current_index));
     }
 
