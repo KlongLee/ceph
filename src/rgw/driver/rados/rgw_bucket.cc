@@ -2760,7 +2760,7 @@ public:
     const auto& log = bci.info.layout.logs.back();
 //    ldpp_dout(dpp, 10) << "deleted: " << bci.info.bucket_deleted() << dendl;
     if (bci.info.bucket_deleted() && log.layout.type != rgw::BucketLogType::Deleted) {
-      bci.info.layout.logs.push_back(rgw::log_layout_from_deleted_index(0, bci.info.layout.current_index));
+      bci.info.layout.logs.push_back({0, rgw::BucketLogType::Deleted});
     }
 
     ret = svc.bucket->store_bucket_instance_info(ctx,
