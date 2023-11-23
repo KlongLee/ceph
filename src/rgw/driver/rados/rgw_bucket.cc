@@ -2748,7 +2748,6 @@ public:
   int do_remove(RGWSI_MetaBackend_Handler::Op *op, string& entry, RGWObjVersionTracker& objv_tracker,
                 optional_yield y, const DoutPrefixProvider *dpp) override {
     RGWBucketCompleteInfo bci;
-    real_time mtime;
 
     RGWSI_Bucket_BI_Ctx ctx(op->ctx());
 
@@ -2756,32 +2755,7 @@ public:
     if (ret < 0 && ret != -ENOENT) {
       return ret;
     }
-
-    const auto& log = bci.info.layout.logs.back();
-//    ldpp_dout(dpp, 10) << "deleted: " << bci.info.bucket_deleted() << dendl;
-    if (bci.info.bucket_deleted() && log.layout.type != rgw::BucketLogType::Deleted) {
-      bci.info.layout.logs.push_back({0, rgw::BucketLogType::Deleted});
-    }
-
-    ret = svc.bucket->store_bucket_instance_info(ctx,
-                                                 RGWSI_Bucket::get_bi_meta_key(bci.info.bucket),
-                                                 bci.info,
-                                                 nullptr,
-                                                 false,
-                                                 mtime, &bci.attrs, y, dpp);
-    if (ret < 0) {
-      ldpp_dout(dpp, 0) << "ERROR: failed to store bucket instance info for bucket=" << bci.info.bucket << " ret=" << ret << dendl;
-      return ret;
-    }
-
-    ret = svc.bucket->remove_bucket_instance_info(
-        ctx, entry, bci.info, &bci.info.objv_tracker, y, dpp);
-    if (ret < 0)
-      return ret;
-    ret = update_bucket_topic_mappings(dpp, &bci, /*current_bci=*/nullptr,
-                                       driver);
-    // update_bucket_topic_mapping error is swallowed.
-    return 0;
+    return svc.bucket->remove_bucket_instance_info(ctx, entry, bci.info, &bci.info.objv_tracker, y, dpp);
   }
 
   int call(std::function<int(RGWSI_Bucket_BI_Ctx& ctx)> f) {
@@ -2910,6 +2884,14 @@ int RGWMetadataHandlerPut_BucketInstance::put_check(const DoutPrefixProvider *dp
     /* existing bucket, keep its placement */
     bci.info.bucket.explicit_placement = old_bci->info.bucket.explicit_placement;
     bci.info.placement_rule = old_bci->info.placement_rule;
+
+    //if the bucket is being deleted, create and store a special log type for
+    //bucket instance cleanup in multisite setup
+    const auto& log = bci.info.layout.logs.back();
+    if (bci.info.bucket_deleted() && log.layout.type != rgw::BucketLogType::Deleted) {
+      bci.info.layout.logs.push_back({0, {rgw::BucketLogType::Deleted}});
+      ldpp_dout(dpp, 10) << "store log layout type: " <<  bci.info.layout.logs.back().layout.type << dendl;
+    }
   }
 
   //always keep bucket versioning enabled on archive zone
@@ -2920,7 +2902,7 @@ int RGWMetadataHandlerPut_BucketInstance::put_check(const DoutPrefixProvider *dp
   /* record the read version (if any), store the new version */
   bci.info.objv_tracker.read_version = objv_tracker.read_version;
   bci.info.objv_tracker.write_version = objv_tracker.write_version;
-
+  
   return 0;
 }
 
@@ -2936,15 +2918,37 @@ int RGWMetadataHandlerPut_BucketInstance::put_checked(const DoutPrefixProvider *
 
   RGWSI_Bucket_BI_Ctx ctx(op->ctx());
 
-  return bihandler->svc.bucket->store_bucket_instance_info(ctx,
-                                                         entry,
-                                                         info,
-                                                         orig_info,
-                                                         false,
-                                                         mtime,
-                                                         pattrs,
-							 y,
-                                                         dpp);
+  //retry loop
+  static constexpr auto max_retries = 10;
+  int retries = 0;
+  int ret;
+  do {
+    ldpp_dout(dpp, 10) << "log type: " <<  info.layout.logs.back().layout.type << dendl;
+    ret = bihandler->svc.bucket->store_bucket_instance_info(ctx,
+                                                          entry,
+                                                          info,
+                                                          orig_info,
+                                                          false,
+                                                          mtime,
+                                                          pattrs,
+                y,
+                                                          dpp);
+    if (ret == -ECANCELED) {
+      //racing write. re-read bucket info
+      int r = bihandler->svc.bucket->read_bucket_instance_info(ctx, entry, 
+                                                                &info, &mtime,
+                                                                pattrs, y, dpp);
+      if (r < 0) {
+        ldpp_dout(dpp, 10) << "ERROR: failed to read bucket instance info for bucket=" << info.bucket.name << " ret=" << r << dendl;
+        ret = r;
+        break;
+      }
+    }
+
+  } while (ret == -ECANCELED && ++retries < max_retries);
+
+  return ret;
+
 }
 
 int RGWMetadataHandlerPut_BucketInstance::put_post(const DoutPrefixProvider *dpp)
