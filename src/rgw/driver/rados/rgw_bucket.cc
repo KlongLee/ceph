@@ -2918,36 +2918,15 @@ int RGWMetadataHandlerPut_BucketInstance::put_checked(const DoutPrefixProvider *
 
   RGWSI_Bucket_BI_Ctx ctx(op->ctx());
 
-  //retry loop
-  static constexpr auto max_retries = 10;
-  int retries = 0;
-  int ret;
-  do {
-    ldpp_dout(dpp, 10) << "log type: " <<  info.layout.logs.back().layout.type << dendl;
-    ret = bihandler->svc.bucket->store_bucket_instance_info(ctx,
-                                                          entry,
-                                                          info,
-                                                          orig_info,
-                                                          false,
-                                                          mtime,
-                                                          pattrs,
-                y,
-                                                          dpp);
-    if (ret == -ECANCELED) {
-      //racing write. re-read bucket info
-      int r = bihandler->svc.bucket->read_bucket_instance_info(ctx, entry, 
-                                                                &info, &mtime,
-                                                                pattrs, y, dpp);
-      if (r < 0) {
-        ldpp_dout(dpp, 10) << "ERROR: failed to read bucket instance info for bucket=" << info.bucket.name << " ret=" << r << dendl;
-        ret = r;
-        break;
-      }
-    }
-
-  } while (ret == -ECANCELED && ++retries < max_retries);
-
-  return ret;
+  return bihandler->svc.bucket->store_bucket_instance_info(ctx,
+                                                         entry,
+                                                         info,
+                                                         orig_info,
+                                                         false,
+                                                         mtime,
+                                                         pattrs,
+                                                         y,
+                                                         dpp);
 
 }
 
