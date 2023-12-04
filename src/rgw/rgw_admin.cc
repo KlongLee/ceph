@@ -6838,7 +6838,7 @@ int main(int argc, const char **argv)
       }
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id, path,
                                                                  assume_role_doc, description, max_session_duration);
-      ret = role->create(dpp(), true, "", null_yield);
+      ret = role->create(dpp(), "", null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -6867,7 +6867,7 @@ int main(int argc, const char **argv)
         return -EINVAL;
       }
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_name(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -6897,12 +6897,13 @@ int main(int argc, const char **argv)
       }
 
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_name(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
       role->update_trust_policy(assume_role_doc);
-      ret = role->update(dpp(), null_yield);
+      constexpr bool exclusive = false;
+      ret = role->store_info(dpp(), exclusive, null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -6992,12 +6993,13 @@ int main(int argc, const char **argv)
       }
 
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_name(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
       role->set_perm_policy(policy_name, perm_policy_doc);
-      ret = role->update(dpp(), null_yield);
+      constexpr bool exclusive = false;
+      ret = role->store_info(dpp(), exclusive, null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7011,7 +7013,7 @@ int main(int argc, const char **argv)
         return -EINVAL;
       }
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_name(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7031,7 +7033,7 @@ int main(int argc, const char **argv)
         return -EINVAL;
       }
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      int ret = role->get(dpp(), null_yield);
+      int ret = role->load_by_name(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7055,7 +7057,7 @@ int main(int argc, const char **argv)
         return -EINVAL;
       }
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_name(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7063,7 +7065,8 @@ int main(int argc, const char **argv)
       if (ret < 0) {
         return -ret;
       }
-      ret = role->update(dpp(), null_yield);
+      constexpr bool exclusive = false;
+      ret = role->store_info(dpp(), exclusive, null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7092,7 +7095,7 @@ int main(int argc, const char **argv)
       }
 
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_id(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7107,7 +7110,8 @@ int main(int argc, const char **argv)
         cout << "That managed policy is already attached." << std::endl;
         return EEXIST;
       }
-      ret = role->update(dpp(), null_yield);
+      constexpr bool exclusive = false;
+      ret = role->store_info(dpp(), exclusive, null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7126,7 +7130,7 @@ int main(int argc, const char **argv)
       }
 
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_id(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7139,7 +7143,8 @@ int main(int argc, const char **argv)
       }
       policies.arns.erase(i);
 
-      ret = role->update(dpp(), null_yield);
+      constexpr bool exclusive = false;
+      ret = role->store_info(dpp(), exclusive, null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7153,7 +7158,7 @@ int main(int argc, const char **argv)
         return EINVAL;
       }
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_id(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7169,7 +7174,7 @@ int main(int argc, const char **argv)
       }
 
       std::unique_ptr<rgw::sal::RGWRole> role = driver->get_role(role_name, tenant, account_id);
-      ret = role->get(dpp(), null_yield);
+      ret = role->load_by_name(dpp(), null_yield);
       if (ret < 0) {
         return -ret;
       }
@@ -7178,7 +7183,8 @@ int main(int argc, const char **argv)
         ret = -EINVAL;
         return ret;
       }
-      ret = role->update(dpp(), null_yield);
+      constexpr bool exclusive = false;
+      ret = role->store_info(dpp(), exclusive, null_yield);
       if (ret < 0) {
         return -ret;
       }
