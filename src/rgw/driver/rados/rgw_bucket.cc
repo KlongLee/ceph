@@ -2750,15 +2750,9 @@ public:
 
   int do_remove(RGWSI_MetaBackend_Handler::Op *op, string& entry, RGWObjVersionTracker& objv_tracker,
                 optional_yield y, const DoutPrefixProvider *dpp) override {
-    RGWBucketCompleteInfo bci;
 
-    RGWSI_Bucket_BI_Ctx ctx(op->ctx());
+    return 0; // skip bucket instance removal. bilog trimming handles it on each zone.
 
-    int ret = read_bucket_instance_entry(ctx, entry, &bci, nullptr, y, dpp);
-    if (ret < 0 && ret != -ENOENT) {
-      return ret;
-    }
-    return svc.bucket->remove_bucket_instance_info(ctx, entry, bci.info, &bci.info.objv_tracker, y, dpp);
   }
 
   int call(std::function<int(RGWSI_Bucket_BI_Ctx& ctx)> f) {
