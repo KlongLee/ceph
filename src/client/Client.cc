@@ -1091,10 +1091,31 @@ Inode * Client::add_update_inode(InodeStat *st, utime_t from,
     // the inode stat is from auth mds
     if (new_version || (st->cap.flags & CEPH_CAP_FLAG_AUTH)) {
       in->dir_layout = st->dir_layout;
-      ldout(cct, 20) << " dir hash is " << (int)in->dir_layout.dl_dir_hash << dendl;
+      ldout(cct, 20) << " dir hash is " << (int)in->dir_layout.dl_dir_hash
+                     << " snap_rstats " << st->snap_rstats
+                     << " snap_dirstats " << st->snap_dirstats << dendl;
       in->rstat = st->rstat;
       in->quota = st->quota;
       in->dir_pin = st->dir_pin;
+
+      Inode *pin = in;
+      if (in->snapid != CEPH_NOSNAP) {
+        vinodeno_t vino(in->vino().ino, CEPH_NOSNAP);
+	if (inode_map.count(vino)) {
+          pin = inode_map[vino];
+        } else {
+          pin = nullptr;
+        }
+      }
+      /*
+       * Just skip saving this because the fill_stat will lookup
+       * the parent anyway when needed.
+       */
+      if (likely(pin != nullptr)) {
+        pin->is_inode_cowed = st->is_inode_cowed;
+        pin->snap_rstats = st->snap_rstats;
+        pin->snap_dirstats = st->snap_dirstats;
+      }
     }
     // move me if/when version reflects fragtree changes.
     if (in->dirfragtree != st->dirfragtree) {
@@ -8507,7 +8528,11 @@ int Client::stat(const char *relpath, struct stat *stbuf, const UserPerm& perms,
     ldout(cct, 3) << __func__ << " exit on error!" << dendl;
     return r;
   }
-  fill_stat(in, stbuf, dirstat);
+  r = fill_stat(in, stbuf, perms, dirstat);
+  if (r < 0) {
+    return r;
+  }
+
   ldout(cct, 3) << __func__ << " exit (relpath " << relpath << " mask " << mask << ")" << dendl;
   return r;
 }
@@ -8565,12 +8590,109 @@ int Client::lstat(const char *relpath, struct stat *stbuf,
     ldout(cct, 3) << __func__ << " exit on error!" << dendl;
     return r;
   }
-  fill_stat(in, stbuf, dirstat);
+  r = fill_stat(in, stbuf, perms, dirstat);
+  if (r < 0) {
+    return r;
+  }
+
   ldout(cct, 3) << __func__ << " exit (relpath " << relpath << " mask " << mask << ")" << dendl;
   return r;
 }
 
-int Client::fill_stat(Inode *in, struct stat *st, frag_info_t *dirstat, nest_info_t *rstat)
+int Client::get_stat_size(Inode *in, const UserPerm& perms, uint64_t *stat_size)
+{
+  int r;
+
+  *stat_size = 0;
+
+  if (cct->_conf->client_dirsize_rbytes) {
+    if (in->snapid == CEPH_SNAPDIR) {
+      if (mdsmap->get_snap_rstat()) {
+        vinodeno_t vino(in->vino().ino, CEPH_NOSNAP);
+        if (!inode_map.count(vino)) {
+          r = _lookup_vino(vino, perms, nullptr);
+          if (r) {
+            return r;
+          }
+        }
+        ceph_assert(inode_map.count(vino));
+        Inode *pin = inode_map[vino];
+
+        for (const auto &[snapid, rstat] : pin->snap_rstats) {
+          *stat_size += rstat.rbytes;
+        }
+	if (!pin->is_inode_cowed) {
+          *stat_size += pin->rstat.rbytes;
+        }
+      } else {
+        *stat_size = 0;
+      }
+    } else if (in->snapid != CEPH_NOSNAP) {
+      if (mdsmap->get_snap_rstat()) {
+        vinodeno_t vino(in->vino().ino, CEPH_NOSNAP);
+        if (!inode_map.count(vino)) {
+          r = _lookup_vino(vino, perms, nullptr);
+          if (r) {
+            return r;
+          }
+        }
+        ceph_assert(inode_map.count(vino));
+        Inode *pin = inode_map[vino];
+
+        /*
+         * If not in the snap_rstats map we are sure that the MDSs haven't
+         * COWed the CInode to the old_inodes yet. Then we should use the
+         * rstat from the parent.
+         */
+        if (pin->snap_rstats.count(in->snapid)) {
+          *stat_size = pin->snap_rstats[in->snapid].rbytes;
+        } else {
+          *stat_size = pin->rstat.rbytes;
+        }
+      } else {
+        *stat_size = 0;
+      }
+    } else {
+      *stat_size = in->rstat.rbytes;
+    }
+  } else {
+    if (in->snapid == CEPH_SNAPDIR) {
+      SnapRealm *realm = get_snap_realm_maybe(in->vino().ino);
+      if (realm) {
+        *stat_size = realm->my_snaps.size();
+        put_snap_realm(realm);
+      }
+    } else if (in->snapid != CEPH_NOSNAP) {
+      vinodeno_t vino(in->vino().ino, CEPH_NOSNAP);
+      if (!inode_map.count(vino)) {
+        r = _lookup_vino(vino, perms, nullptr);
+        if (r) {
+          return r;
+        }
+      }
+      ceph_assert(inode_map.count(vino));
+      Inode *pin = inode_map[vino];
+
+      /*
+       * If not in the snap_dirstats map we are sure that the MDSs haven't
+       * COWed the CInode to the old_inodes yet. Then we should use the
+       * rstat from the parent.
+       */
+      if (pin->snap_dirstats.count(in->snapid)) {
+        *stat_size = pin->snap_dirstats[in->snapid].size();
+      } else {
+        *stat_size = pin->dirstat.size();
+      }
+    } else {
+      *stat_size = in->dirstat.size();
+    }
+  }
+
+  return 0;
+}
+
+int Client::fill_stat(Inode *in, struct stat *st, const UserPerm& perms,
+                      frag_info_t *dirstat, nest_info_t *rstat)
 {
   ldout(cct, 10) << __func__ << " on " << in->ino << " snap/dev" << in->snapid
 	   << " mode 0" << oct << in->mode << dec
@@ -8613,17 +8735,13 @@ int Client::fill_stat(Inode *in, struct stat *st, frag_info_t *dirstat, nest_inf
   stat_set_mtime_sec(st, in->mtime.sec());
   stat_set_mtime_nsec(st, in->mtime.nsec());
   if (in->is_dir()) {
-    if (cct->_conf->client_dirsize_rbytes) {
-      st->st_size = in->rstat.rbytes;
-    } else if (in->snapid == CEPH_SNAPDIR) {
-      SnapRealm *realm = get_snap_realm_maybe(in->vino().ino);
-      if (realm) {
-        st->st_size = realm->my_snaps.size();
-        put_snap_realm(realm);
-      }
-    } else {
-      st->st_size = in->dirstat.size();
+    uint64_t st_size;
+    int ret = get_stat_size(in, perms, &st_size);
+    if (ret < 0) {
+      return ret;
     }
+    st->st_size = st_size;
+
 // The Windows "stat" structure provides just a subset of the fields that are
 // available on Linux.
 #ifndef _WIN32
@@ -8647,7 +8765,8 @@ int Client::fill_stat(Inode *in, struct stat *st, frag_info_t *dirstat, nest_inf
   return in->caps_issued();
 }
 
-void Client::fill_statx(Inode *in, unsigned int mask, struct ceph_statx *stx)
+int Client::fill_statx(Inode *in, const UserPerm& perms, unsigned int mask,
+                       struct ceph_statx *stx)
 {
   ldout(cct, 10) << __func__ << " on " << in->ino << " snap/dev" << in->snapid
 	   << " mode 0" << oct << in->mode << dec
@@ -8705,16 +8824,9 @@ void Client::fill_statx(Inode *in, unsigned int mask, struct ceph_statx *stx)
     in->mtime.to_timespec(&stx->stx_mtime);
 
     if (in->is_dir()) {
-      if (cct->_conf->client_dirsize_rbytes) {
-	stx->stx_size = in->rstat.rbytes;
-      } else if (in->snapid == CEPH_SNAPDIR) {
-        SnapRealm *realm = get_snap_realm_maybe(in->vino().ino);
-	if (realm) {
-          stx->stx_size = realm->my_snaps.size();
-          put_snap_realm(realm);
-	}
-      } else {
-	stx->stx_size = in->dirstat.size();
+      int ret = get_stat_size(in, perms, &stx->stx_size);
+      if (ret < 0) {
+        return ret;
       }
       stx->stx_blocks = 1;
     } else {
@@ -8735,6 +8847,7 @@ void Client::fill_statx(Inode *in, unsigned int mask, struct ceph_statx *stx)
     stx->stx_mask |= (CEPH_STATX_CTIME|CEPH_STATX_VERSION);
   }
 
+  return 0;
 }
 
 void Client::touch_dn(Dentry *dn)
@@ -9407,7 +9520,7 @@ int Client::_readdir_cache_cb(dir_result_t *dirp, add_dirent_cb_t cb, void *p,
 
     struct ceph_statx stx;
     struct dirent de;
-    fill_statx(dn->inode, caps, &stx);
+    fill_statx(dn->inode, dirp->perms, caps, &stx);
 
     uint64_t next_off = dn->offset + 1;
     fill_dirent(&de, dn->name.c_str(), stx.stx_mode, stx.stx_ino, next_off);
@@ -9535,7 +9648,7 @@ int Client::_readdir_r_cb(int op,
     if (r < 0)
       return r;
 
-    fill_statx(diri, caps, &stx);
+    fill_statx(diri, dirp->perms, caps, &stx);
     fill_dirent(&de, ".", S_IFDIR, stx.stx_ino, next_off);
 
     Inode *inode = NULL;
@@ -9568,7 +9681,7 @@ int Client::_readdir_r_cb(int op,
     if (r < 0)
       return r;
 
-    fill_statx(in, caps, &stx);
+    fill_statx(in, dirp->perms, caps, &stx);
     fill_dirent(&de, "..", S_IFDIR, stx.stx_ino, next_off);
 
     Inode *inode = NULL;
@@ -9642,7 +9755,7 @@ int Client::_readdir_r_cb(int op,
 	  return r;
       }
 
-      fill_statx(entry.inode, caps, &stx);
+      fill_statx(entry.inode, dirp->perms, caps, &stx);
       fill_dirent(&de, entry.name.c_str(), stx.stx_mode, stx.stx_ino, next_off);
 
       Inode *inode = NULL;
@@ -12095,7 +12208,11 @@ int Client::fstat(int fd, struct stat *stbuf, const UserPerm& perms, int mask)
   int r = _getattr(f->inode, mask, perms);
   if (r < 0)
     return r;
-  fill_stat(f->inode, stbuf, NULL);
+  r = fill_stat(f->inode, stbuf, perms, NULL);
+  if (r < 0) {
+    return r;
+  }
+
   ldout(cct, 5) << "fstat(" << fd << ", " << stbuf << ") = " << r << dendl;
   return r;
 }
@@ -12126,7 +12243,7 @@ int Client::fstatx(int fd, struct ceph_statx *stx, const UserPerm& perms,
     }
   }
 
-  fill_statx(f->inode, mask, stx);
+  fill_statx(f->inode, perms, mask, stx);
   ldout(cct, 3) << "fstatx(" << fd << ", " << stx << ") = " << r << dendl;
   return r;
 }
@@ -12164,7 +12281,7 @@ int Client::statxat(int dirfd, const char *relpath,
     return r;
   }
 
-  fill_statx(in, mask, stx);
+  fill_statx(in, perms, mask, stx);
   ldout(cct, 3) << __func__ << " dirfd" << dirfd << ", r= " << r << dendl;
   return r;
 }
@@ -13085,7 +13202,10 @@ int Client::ll_lookup(Inode *parent, const char *name, struct stat *attr,
   }
 
   ceph_assert(in);
-  fill_stat(in, attr);
+  r = fill_stat(in, attr, perms);
+  if (r < 0) {
+    return r;
+  }
   _ll_get(in.get());
 
  out:
@@ -13183,7 +13303,7 @@ int Client::ll_lookupx(Inode *parent, const char *name, Inode **out,
     stx->stx_mask = 0;
   } else {
     ceph_assert(in);
-    fill_statx(in, mask, stx);
+    fill_statx(in, perms, mask, stx);
     _ll_get(in.get());
   }
 
@@ -13220,7 +13340,7 @@ int Client::ll_walk(const char* name, Inode **out, struct ceph_statx *stx,
     return rc;
   } else {
     ceph_assert(in);
-    fill_statx(in, mask, stx);
+    fill_statx(in, perms, mask, stx);
     _ll_get(in.get());
     *out = in.get();
     return 0;
@@ -13400,8 +13520,12 @@ int Client::ll_getattr(Inode *in, struct stat *attr, const UserPerm& perms)
 
   int res = _ll_getattr(in, CEPH_STAT_CAP_INODE_ALL, perms);
 
-  if (res == 0)
-    fill_stat(in, attr);
+  if (res == 0) {
+    int ret = fill_stat(in, attr, perms);
+    if (ret < 0) {
+      return ret;
+    }
+  }
   ldout(cct, 3) << __func__ << " " << _get_vino(in) << " = " << res << dendl;
   return res;
 }
@@ -13422,7 +13546,7 @@ int Client::ll_getattrx(Inode *in, struct ceph_statx *stx, unsigned int want,
     res = _ll_getattr(in, mask, perms);
 
   if (res == 0)
-    fill_statx(in, mask, stx);
+    fill_statx(in, perms, mask, stx);
   ldout(cct, 3) << __func__ << " " << _get_vino(in) << " = " << res << dendl;
   return res;
 }
@@ -13469,7 +13593,7 @@ int Client::ll_setattrx(Inode *in, struct ceph_statx *stx, int mask,
   int res = _ll_setattrx(in, stx, mask, perms, &target);
   if (res == 0) {
     ceph_assert(in == target.get());
-    fill_statx(in, in->caps_issued(), stx);
+    fill_statx(in, perms, in->caps_issued(), stx);
   }
 
   ldout(cct, 3) << __func__ << " " << _get_vino(in) << " = " << res << dendl;
@@ -13492,7 +13616,10 @@ int Client::ll_setattr(Inode *in, struct stat *attr, int mask,
   int res = _ll_setattrx(in, &stx, mask, perms, &target);
   if (res == 0) {
     ceph_assert(in == target.get());
-    fill_stat(in, attr);
+    int ret = fill_stat(in, attr, perms);
+    if (ret < 0) {
+      return ret;
+    }
   }
 
   ldout(cct, 3) << __func__ << " " << _get_vino(in) << " = " << res << dendl;
@@ -14654,7 +14781,10 @@ int Client::ll_mknod(Inode *parent, const char *name, mode_t mode,
   InodeRef in;
   int r = _mknod(parent, name, mode, rdev, perms, &in);
   if (r == 0) {
-    fill_stat(in, attr);
+    int ret = fill_stat(in, attr, perms);
+    if (ret < 0) {
+      return ret;
+    }
     _ll_get(in.get());
   }
   tout(cct) << attr->st_ino << std::endl;
@@ -14695,7 +14825,7 @@ int Client::ll_mknodx(Inode *parent, const char *name, mode_t mode,
   InodeRef in;
   int r = _mknod(parent, name, mode, rdev, perms, &in);
   if (r == 0) {
-    fill_statx(in, caps, stx);
+    fill_statx(in, perms, caps, stx);
     _ll_get(in.get());
   }
   tout(cct) << stx->stx_ino << std::endl;
@@ -14892,7 +15022,10 @@ int Client::ll_mkdir(Inode *parent, const char *name, mode_t mode,
   InodeRef in;
   int r = _mkdir(parent, name, mode, perm, &in);
   if (r == 0) {
-    fill_stat(in, attr);
+    int ret = fill_stat(in, attr, perm);
+    if (ret < 0) {
+      return ret;
+    }
     _ll_get(in.get());
   }
   tout(cct) << attr->st_ino << std::endl;
@@ -14929,7 +15062,7 @@ int Client::ll_mkdirx(Inode *parent, const char *name, mode_t mode, Inode **out,
   InodeRef in;
   int r = _mkdir(parent, name, mode, perms, &in);
   if (r == 0) {
-    fill_statx(in, statx_to_mask(flags, want), stx);
+    fill_statx(in, perms, statx_to_mask(flags, want), stx);
     _ll_get(in.get());
   } else {
     stx->stx_ino = 0;
@@ -15011,7 +15144,10 @@ int Client::ll_symlink(Inode *parent, const char *name, const char *value,
   InodeRef in;
   int r = _symlink(parent, name, value, perms, "", &in);
   if (r == 0) {
-    fill_stat(in, attr);
+    int ret = fill_stat(in, attr, perms);
+    if (ret < 0) {
+      return ret;
+    }
     _ll_get(in.get());
   }
   tout(cct) << attr->st_ino << std::endl;
@@ -15049,7 +15185,7 @@ int Client::ll_symlinkx(Inode *parent, const char *name, const char *value,
   InodeRef in;
   int r = _symlink(parent, name, value, perms, "", &in);
   if (r == 0) {
-    fill_statx(in, statx_to_mask(flags, want), stx);
+    fill_statx(in, perms, statx_to_mask(flags, want), stx);
     _ll_get(in.get());
   }
   tout(cct) << stx->stx_ino << std::endl;
@@ -15720,7 +15856,11 @@ int Client::ll_create(Inode *parent, const char *name, mode_t mode,
       _ll_get(in.get());
       *outp = in.get();
     }
-    fill_stat(in, attr);
+
+    int ret = fill_stat(in, attr, perms);
+    if (ret < 0) {
+      return ret;
+    }
   } else {
     attr->st_ino = 0;
   }
@@ -15750,7 +15890,7 @@ int Client::ll_createx(Inode *parent, const char *name, mode_t mode,
       _ll_get(in.get());
       *outp = in.get();
     }
-    fill_statx(in, caps, stx);
+    fill_statx(in, perms, caps, stx);
   } else {
     stx->stx_ino = 0;
     stx->stx_mask = 0;
