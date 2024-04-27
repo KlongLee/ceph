@@ -337,3 +337,14 @@ if(WITH_RADOSGW_POSIX)
   target_link_libraries(unittest_posix_bucket_cache  ${UNITTEST_LIBS}
     ${rgw_libs} ${LMDB_LIBRARIES})
 endif(WITH_RADOSGW_POSIX)
+
+# ceph_test_datalog
+add_executable(ceph_test_datalog test_datalog.cc)
+target_include_directories(ceph_test_datalog
+  SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src/rgw"
+  SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src/rgw/store/rados")
+target_link_libraries(ceph_test_datalog
+  libneorados
+  neoradostest-support
+  ${UNITTEST_LIBS}
+  ${rgw_libs})
