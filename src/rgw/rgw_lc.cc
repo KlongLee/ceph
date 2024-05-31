@@ -565,14 +565,18 @@ static int remove_expired_obj(const DoutPrefixProvider* dpp,
                               lc_op_ctx& oc,
                               bool remove_indeed,
                               const rgw::notify::EventTypeList& event_types) {
+  int ret{0};
   auto& driver = oc.driver;
   auto& bucket_info = oc.bucket->get_info();
   auto& o = oc.o;
   auto obj_key = o.key;
   auto& meta = o.meta;
-  int ret;
   auto version_id = obj_key.instance; // deep copy, so not cleared below
+
+  /* used only by notifications */
   std::unique_ptr<rgw::sal::Notification> notify;
+  RGWObjState* obj_state{nullptr};
+  string etag;
 
   /* per discussion w/Daniel, Casey,and Eric, we *do need*
    * a new sal object handle, based on the following decision
@@ -583,17 +587,22 @@ static int remove_expired_obj(const DoutPrefixProvider* dpp,
   } else if (obj_key.instance.empty()) {
     obj_key.instance = "null";
   }
-  auto obj = oc.bucket->get_object(obj_key);
 
-  RGWObjState* obj_state{nullptr};
-  string etag;
+  auto obj = oc.bucket->get_object(obj_key);
   ret = obj->get_obj_state(dpp, &obj_state, null_yield, true);
   if (ret < 0) {
+    ldpp_dout(oc.dpp, 0) <<
+      fmt::format("ERROR: get_obj_state() failed in {} for object k={} error r={}",
+		  __func__, oc.o.key.to_string(), ret) << dendl;
     return ret;
   }
-  auto iter = obj_state->attrset.find(RGW_ATTR_ETAG);
-  if (iter != obj_state->attrset.end()) {
-    etag = rgw_bl_str(iter->second);
+
+  auto have_notify = !event_types.empty();
+  if (have_notify) {
+    auto iter = obj_state->attrset.find(RGW_ATTR_ETAG);
+    if (iter != obj_state->attrset.end()) {
+      etag = rgw_bl_str(iter->second);
+    }
   }
 
   std::unique_ptr<rgw::sal::Object::DeleteOp> del_op
@@ -605,18 +614,20 @@ static int remove_expired_obj(const DoutPrefixProvider* dpp,
   del_op->params.bucket_owner = bucket_info.owner;
   del_op->params.unmod_since = meta.mtime;
 
-  // notification supported only for RADOS driver for now
-  notify = driver->get_notification(
-      dpp, obj.get(), nullptr, event_types, oc.bucket, lc_id,
-      const_cast<std::string&>(oc.bucket->get_tenant()), lc_req_id, null_yield);
+  if (have_notify) {
+    // notification supported only for RADOS driver for now
+    notify =
+      driver->get_notification(
+          dpp, obj.get(), nullptr, event_types, oc.bucket, lc_id,
+	  const_cast<std::string&>(oc.bucket->get_tenant()), lc_req_id, null_yield);
 
-  ret = notify->publish_reserve(dpp, nullptr);
-  if ( ret < 0) {
-    ldpp_dout(dpp, 1)
-      << "ERROR: notify reservation failed, deferring delete of object k="
-      << o.key
-      << dendl;
-    return ret;
+    ret = notify->publish_reserve(dpp, nullptr);
+    if ( ret < 0) {
+      ldpp_dout(dpp, 1)
+	<< fmt::format("ERROR: {} notify reservation failed, deferring delete of object k=",
+		       __func__, o.key.to_string()) << dendl;
+      return ret;
+    }
   }
 
   uint32_t flags = (!remove_indeed || !zonegroup_lc_check(dpp, oc.driver->get_zone()))
@@ -626,13 +637,17 @@ static int remove_expired_obj(const DoutPrefixProvider* dpp,
     ldpp_dout(dpp, 1) <<
       fmt::format("ERROR: {} failed, with error: {}", __func__, ret) << dendl;
   } else {
-    // send request to notification manager
-    int publish_ret = notify->publish_commit(dpp, obj_state->size,
-				 ceph::real_clock::now(),
-				 etag,
-				 version_id);
-    if (publish_ret < 0) {
-      ldpp_dout(dpp, 5) << "WARNING: notify publish_commit failed, with error: " << publish_ret << dendl;
+    if (have_notify) {
+      // send request to notification manager
+      int publish_ret = notify->publish_commit(dpp, obj_state->size,
+					       ceph::real_clock::now(),
+					       etag,
+					       version_id);
+      if (publish_ret < 0) {
+	ldpp_dout(dpp, 5) <<
+	  fmt::format("WARNING: {} notify publish_commit failed, with error: {} ",
+		      __func__, publish_ret) << dendl;
+      }
     }
   }
 
@@ -1250,7 +1265,8 @@ public:
   int process(lc_op_ctx& oc) override {
     auto& o = oc.o;
     int r = remove_expired_obj(oc.dpp, oc, true,
-                               {rgw::notify::ObjectExpirationNoncurrent});
+                               {rgw::notify::LifecycleExpirationDelete,
+				rgw::notify::ObjectExpirationNoncurrent});
     if (r < 0) {
       ldpp_dout(oc.dpp, 0) << "ERROR: remove_expired_obj (non-current expiration) " 
 			   << oc.bucket << ":" << o.key
@@ -1378,22 +1394,19 @@ public:
      */
     if (! oc.bucket->versioned()) {
       ret =
-          remove_expired_obj(oc.dpp, oc, true, {rgw::notify::ObjectTransition});
+	remove_expired_obj(oc.dpp, oc, true, {/* no delete notify expected */});
       ldpp_dout(oc.dpp, 20) << "delete_tier_obj Object(key:" << oc.o.key
                             << ") not versioned flags: " << oc.o.flags << dendl;
     } else {
       /* versioned */
       if (oc.o.is_current() && !oc.o.is_delete_marker()) {
-        ret = remove_expired_obj(oc.dpp, oc, false,
-                                 {rgw::notify::ObjectTransitionCurrent,
-                                  rgw::notify::LifecycleTransition});
+        ret = remove_expired_obj(oc.dpp, oc, false, {/* no delete notify expected */});
         ldpp_dout(oc.dpp, 20) << "delete_tier_obj Object(key:" << oc.o.key
                               << ") current & not delete_marker"
                               << " versioned_epoch:  " << oc.o.versioned_epoch
                               << "flags: " << oc.o.flags << dendl;
       } else {
-        ret = remove_expired_obj(oc.dpp, oc, true,
-                                 {rgw::notify::ObjectTransitionNoncurrent});
+        ret = remove_expired_obj(oc.dpp, oc, true, {/* no delete notify expected */});
         ldpp_dout(oc.dpp, 20)
             << "delete_tier_obj Object(key:" << oc.o.key << ") not current "
             << "versioned_epoch:  " << oc.o.versioned_epoch
@@ -1410,45 +1423,6 @@ public:
     bool delete_object = (!oc.tier->retain_head_object() ||
                      (oc.o.is_current() && oc.bucket->versioned()));
 
-    /* notifications */
-    auto& bucket = oc.bucket;
-    auto& obj = oc.obj;
-
-    RGWObjState* obj_state{nullptr};
-    string etag;
-    ret = obj->get_obj_state(oc.dpp, &obj_state, null_yield, true);
-    if (ret < 0) {
-      return ret;
-    }
-    auto iter = obj_state->attrset.find(RGW_ATTR_ETAG);
-    if (iter != obj_state->attrset.end()) {
-      etag = rgw_bl_str(iter->second);
-    }
-
-    rgw::notify::EventTypeList event_types;
-    if (bucket->versioned() && oc.o.is_current() && !oc.o.is_delete_marker()) {
-      event_types.insert(event_types.end(),
-                         {rgw::notify::ObjectTransitionCurrent,
-                          rgw::notify::LifecycleTransition});
-    } else {
-      event_types.push_back(rgw::notify::ObjectTransitionNoncurrent);
-    }
-
-    std::unique_ptr<rgw::sal::Notification> notify =
-        oc.driver->get_notification(
-            oc.dpp, obj.get(), nullptr, event_types, bucket, lc_id,
-            const_cast<std::string&>(oc.bucket->get_tenant()), lc_req_id,
-            null_yield);
-    auto version_id = oc.o.key.instance;
-
-    ret = notify->publish_reserve(oc.dpp, nullptr);
-    if (ret < 0) {
-      ldpp_dout(oc.dpp, 1)
-	<< "ERROR: notify reservation failed, deferring transition of object k="
-	<< oc.o.key
-	<< dendl;
-      return ret;
-    }
 
     ret = oc.obj->transition_to_cloud(oc.bucket, oc.tier.get(), oc.o,
 				      oc.env.worker->get_cloud_targets(),
@@ -1456,16 +1430,6 @@ public:
 				      null_yield);
     if (ret < 0) {
       return ret;
-    } else {
-      // send request to notification manager
-      int publish_ret =  notify->publish_commit(oc.dpp, obj_state->size,
-				    ceph::real_clock::now(),
-				    etag,
-				    version_id);
-      if (publish_ret < 0) {
-	ldpp_dout(oc.dpp, 5) <<
-	  "WARNING: notify publish_commit failed, with error: " << publish_ret << dendl;
-      }
     }
 
     if (delete_object) {
@@ -1487,6 +1451,49 @@ public:
       /* Skip objects which are already cloud tiered. */
       ldpp_dout(oc.dpp, 30) << "Object(key:" << oc.o.key << ") is already cloud tiered to cloud-s3 tier: " << oc.o.meta.storage_class << dendl;
       return 0;
+    }
+
+    /* notifications */
+    auto& bucket = oc.bucket;
+    auto& obj = oc.obj;
+
+    RGWObjState* obj_state{nullptr};
+    string etag;
+    r = obj->get_obj_state(oc.dpp, &obj_state, null_yield, true);
+    if (r < 0) {
+      ldpp_dout(oc.dpp, 0) <<
+	fmt::format("ERROR: get_obj_state() failed on transition of object k={} error r={}",
+		    oc.o.key.to_string(), r) << dendl;
+      return r;
+    }
+
+    auto iter = obj_state->attrset.find(RGW_ATTR_ETAG);
+    if (iter != obj_state->attrset.end()) {
+      etag = rgw_bl_str(iter->second);
+    }
+
+    rgw::notify::EventTypeList event_types;
+    event_types.insert(event_types.end(), {rgw::notify::LifecycleTransition});
+    if ((!bucket->versioned()) ||
+	(bucket->versioned() && oc.o.is_current() && !oc.o.is_delete_marker())) {
+      event_types.push_back(rgw::notify::ObjectTransitionCurrent);
+    } else {
+      event_types.push_back(rgw::notify::ObjectTransitionNoncurrent);
+    }
+
+    std::unique_ptr<rgw::sal::Notification> notify =
+        oc.driver->get_notification(
+            oc.dpp, obj.get(), nullptr, event_types, bucket, lc_id,
+            const_cast<std::string&>(oc.bucket->get_tenant()), lc_req_id,
+            null_yield);
+    auto version_id = oc.o.key.instance;
+
+    r = notify->publish_reserve(oc.dpp, nullptr);
+    if (r < 0) {
+      ldpp_dout(oc.dpp, 1)
+	<< "WARNING: notify reservation failed for transition of object k="
+	<< oc.o.key
+	<< dendl;
     }
 
     std::string tier_type = ""; 
@@ -1536,6 +1543,16 @@ public:
         return r;
       }
     }
+
+    // send request to notification manager
+    int publish_ret =
+      notify->publish_commit(oc.dpp, obj_state->size, ceph::real_clock::now(),
+			     etag, version_id);
+    if (publish_ret < 0) {
+      ldpp_dout(oc.dpp, 5) <<
+	"WARNING: notify publish_commit failed, with error: " << publish_ret << dendl;
+    }
+
     ldpp_dout(oc.dpp, 2) << "TRANSITIONED:" << oc.bucket
 			 << ":" << o.key << " -> "
 			 << transition.storage_class
