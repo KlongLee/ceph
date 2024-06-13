@@ -4679,7 +4679,7 @@ void InodeStoreBare::generate_test_instances(std::list<InodeStoreBare*> &ls)
 }
 
 void CInode::validate_disk_state(CInode::validated_data *results,
-                                 MDSContext *fin)
+                                 MDSContext *fin, bool remote_dirfrag_dirty)
 {
   class ValidationContinuation : public MDSContinuation {
   public:
@@ -4688,6 +4688,7 @@ void CInode::validate_disk_state(CInode::validated_data *results,
     CInode::validated_data *results;
     bufferlist bl;
     CInode *shadow_in;
+    bool remote_dirfrag_dirty = false;
 
     enum {
       START = 0,
@@ -4699,12 +4700,13 @@ void CInode::validate_disk_state(CInode::validated_data *results,
 
     ValidationContinuation(CInode *i,
                            CInode::validated_data *data_r,
-                           MDSContext *fin_) :
+                           MDSContext *fin_, bool remote_dirfrag_dirty) :
                              MDSContinuation(i->mdcache->mds->server),
                              fin(fin_),
                              in(i),
                              results(data_r),
-                             shadow_in(NULL) {
+                             shadow_in(NULL),
+                             remote_dirfrag_dirty(remote_dirfrag_dirty) {
       set_callback(START, static_cast<Continuation::stagePtr>(&ValidationContinuation::_start));
       set_callback(BACKTRACE, static_cast<Continuation::stagePtr>(&ValidationContinuation::_backtrace));
       set_callback(INODE, static_cast<Continuation::stagePtr>(&ValidationContinuation::_inode_disk));
@@ -5031,7 +5033,14 @@ next:
 	              "inode and a local dirfrag is dirty; please rerun scrub when "
 		      "system is stable; assuming passed for now;" << dendl;
           results->raw_stats.passed = true;
-	}
+        } else if (remote_dirfrag_dirty) {
+          MDCache *mdcache = in->mdcache; // for dout()
+          auto ino = [this]() { return in->ino(); }; // for dout()
+          dout(20) << "raw stats most likely wont match since it's a directory "
+	              "inode and a remote dirfrag is dirty; please rerun scrub when "
+ 		      "system is stable; assuming passed for now;" << dendl;
+          results->raw_stats.passed = true;
+ 	}
 	goto next;
       }
 
@@ -5069,7 +5078,7 @@ next:
   dout(10) << "scrub starting validate_disk_state on " << *this << dendl;
   ValidationContinuation *vc = new ValidationContinuation(this,
                                                           results,
-                                                          fin);
+                                                          fin, remote_dirfrag_dirty);
   vc->begin();
 }
 
