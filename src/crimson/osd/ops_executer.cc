@@ -810,7 +810,7 @@ void OpsExecuter::fill_op_params(OpsExecuter::modified_by m)
 {
   osd_op_params->req_id = msg->get_reqid();
   osd_op_params->mtime = msg->get_mtime();
-  osd_op_params->at_version = pg->get_next_version();
+  osd_op_params->at_version = pg->get_cur_version();
   osd_op_params->pg_trim_to = pg->get_pg_trim_to();
   osd_op_params->min_last_complete_ondisk = pg->get_min_last_complete_ondisk();
   osd_op_params->last_complete = pg->get_info().last_complete;
@@ -1379,8 +1379,8 @@ static PG::interruptible_future<ceph::bufferlist> do_pgls_common(
           }),
         seastar::make_ready_future<hobject_t>(next));
     }).then_interruptible([pg_end](auto&& ret) {
-      auto entries = std::move(std::get<0>(ret).get0());
-      auto next = std::move(std::get<1>(ret).get0());
+      auto entries = std::get<0>(ret).get0();
+      auto next = std::get<1>(std::move(ret)).get0();
       pg_ls_response_t response;
       response.handle = next.is_max() ? pg_end : next;
       response.entries = std::move(entries);
