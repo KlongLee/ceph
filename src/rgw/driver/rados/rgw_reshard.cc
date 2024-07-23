@@ -387,9 +387,9 @@ static int remove_old_reshard_instance(rgw::sal::RadosStore* store,
 static int init_target_index(rgw::sal::RadosStore* store,
                              RGWBucketInfo& bucket_info,
                              const rgw::bucket_index_layout_generation& index,
-                             const DoutPrefixProvider* dpp)
+                             const DoutPrefixProvider* dpp, optional_yield y)
 {
-  int ret = store->svc()->bi->init_index(dpp, bucket_info, index);
+  int ret = store->svc()->bi->init_index(dpp, y, bucket_info, index);
   if (ret < 0) {
     ldpp_dout(dpp, 0) << "ERROR: " << __func__ << " failed to initialize "
        "target index shard objects: " << cpp_strerror(ret) << dendl;
@@ -456,7 +456,7 @@ static int init_target_layout(rgw::sal::RadosStore* store,
   }
 
   // create the index shard objects
-  int ret = init_target_index(store, bucket_info, target, dpp);
+  int ret = init_target_index(store, bucket_info, target, dpp, y);
   if (ret < 0) {
     return ret;
   }
