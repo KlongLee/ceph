@@ -304,22 +304,6 @@ public:
 
 void cls_rgw_bucket_init_index(librados::ObjectWriteOperation& o);
 
-class CLSRGWIssueBucketIndexClean : public CLSRGWConcurrentIO {
-protected:
-  int issue_op(int shard_id, const std::string& oid) override;
-  int valid_ret_code() override {
-    return -ENOENT;
-  }
-
-public:
-  CLSRGWIssueBucketIndexClean(librados::IoCtx& ioc,
-			      std::map<int, std::string>& _bucket_objs,
-			      uint32_t _max_aio) :
-  CLSRGWConcurrentIO(ioc, _bucket_objs, _max_aio)
-  {}
-  virtual ~CLSRGWIssueBucketIndexClean() override {}
-};
-
 
 class CLSRGWIssueSetTagTimeout : public CLSRGWConcurrentIO {
   uint64_t tag_timeout;
