@@ -52,6 +52,8 @@ using BucketChangeCounter = BoundedKeyCounter<std::string, int>;
 const std::string rgw::BucketTrimStatus::oid = "bilog.trim";
 using rgw::BucketTrimStatus;
 
+const std::string oid_prefix = "deleted_buckets";
+
 
 // watch/notify api for gateways to coordinate about which buckets to trim
 enum TrimNotifyType {
@@ -516,6 +518,88 @@ public:
   }
 };
 
+class AsyncListBucket : public RGWAsyncRadosRequest {
+  CephContext *const cct;
+  rgw::sal::RadosStore* const store;
+  RGWAsyncRadosProcessor *const async_rados;
+  std::string b;
+  rgw::sal::Bucket::ListParams params;
+  rgw_bucket bucket;
+
+  int _send_request(const DoutPrefixProvider *dpp) override;
+ public:
+  AsyncListBucket(CephContext *cct,
+                  RGWCoroutine *caller,
+                  RGWAioCompletionNotifier *cn,
+                  rgw::sal::RadosStore* const store,
+                  RGWAsyncRadosProcessor *const async_rados,
+                  std::string b,
+                  rgw::sal::Bucket::ListParams params)
+    : RGWAsyncRadosRequest(caller, cn), cct(cct), store(store), async_rados(async_rados),
+      b(b), params(params) {}
+  
+  rgw::sal::Bucket::ListResults list_results;
+};
+
+int AsyncListBucket::_send_request(const DoutPrefixProvider *dpp) {
+
+  rgw_bucket_parse_bucket_key(cct, b, &bucket, nullptr);
+  std::unique_ptr<rgw::sal::Bucket> sal_bucket;
+  int r = store->load_bucket(dpp, bucket, &sal_bucket, null_yield);
+  if (r < 0) {
+    ldpp_dout(dpp, 0) << "could not get bucket info for bucket=" << b << " r=" << r << dendl;
+    return r;
+  }
+
+  params.list_versions = true;
+  params.allow_unordered = true;
+  int ret = sal_bucket->list(dpp, params, 1000, list_results, null_yield);
+  if (ret < 0) {
+    ldpp_dout(dpp, -1) << "ERROR failed to list objects in the bucket" << dendl;
+    return ret;
+  }
+  return 0;
+}
+
+class ListBucketCR : public RGWSimpleCoroutine {
+  AsyncListBucket *req{nullptr};
+  CephContext *cct;
+  rgw::sal::RadosStore* const store;
+  std::string b;
+  rgw::sal::Bucket::ListResults *list_results;
+  rgw::sal::Bucket::ListParams params;
+
+ public:
+  ListBucketCR(CephContext *cct,
+              rgw::sal::RadosStore* const store,
+              std::string b,
+              rgw::sal::Bucket::ListResults *list_results)
+    : RGWSimpleCoroutine(cct), store(store),
+      b(b), list_results(list_results) {}
+
+  ~ListBucketCR() override {
+    request_cleanup();
+  }
+
+
+  int send_request(const DoutPrefixProvider *dpp) override {
+    req = new AsyncListBucket(cct, this, stack->create_completion_notifier(),
+                              store, store->svc()->async_processor,
+                              b, params);
+    store->svc()->async_processor->queue(req);
+    return 0;
+  }
+  int request_complete() override {
+    *list_results = std::move(req->list_results);
+    return req->get_ret_status();
+  }
+  void request_cleanup() override {
+    if (req) {
+      req->finish();
+      req = nullptr;
+    }
+  }
+};
 
 /// trim the bilog of all of the given bucket instance's shards
 class BucketTrimInstanceCR : public RGWCoroutine {
@@ -543,6 +627,7 @@ class BucketTrimInstanceCR : public RGWCoroutine {
 			  rgw::bucket_log_layout_generation>> clean_info;
   /// Maximum number of times to attempt to put bucket info
   unsigned retries = 0;
+  rgw::sal::Bucket::ListResults list_results;
 
   int take_min_generation() {
     // Initialize the min_generation to the bucket's current
@@ -769,6 +854,16 @@ int BucketTrimInstanceCR::operate(const DoutPrefixProvider *dpp)
 	return set_cr_error(-EINVAL);
       }
 
+      if (clean_info->first.layout.logs.front().layout.type == rgw::BucketLogType::Deleted) {
+        // check for orphaned objects in the bucket by listing bucket instance.
+        yield call(new ListBucketCR(cct, store, bucket_instance, &list_results));
+        if (retcode < 0) {
+          ldpp_dout(dpp, 10) << "failed to list bucket: " << bucket_instance
+            << cpp_strerror(retcode) << dendl;
+          return set_cr_error(retcode);
+        }
+      }
+
       yield call(new BucketCleanIndexCollectCR(dpp, store, clean_info->first,
 					       clean_info->second.layout.in_index));
       if (retcode < 0) {
@@ -810,16 +905,33 @@ int BucketTrimInstanceCR::operate(const DoutPrefixProvider *dpp)
 	  return set_cr_error(retcode);
 	}
 
-  //remove bucket instance metadata
   if (clean_info->first.layout.logs.front().layout.type == rgw::BucketLogType::Deleted) {
-    yield call(new RGWRemoveBucketInstanceInfoCR(
+    if (list_results.objs.empty()) {
+      //remove bucket instance metadata
+      yield call(new RGWRemoveBucketInstanceInfoCR(
       store->svc()->async_processor,
       store, clean_info->first.bucket,
       clean_info->first, nullptr, dpp));
-    if (retcode < 0) {
-      ldpp_dout(dpp, 0) << "failed to remove instance bucket info: "
-                        << cpp_strerror(retcode) << dendl;
-      return set_cr_error(retcode);
+      if (retcode < 0) {
+        ldpp_dout(dpp, 0) << "failed to remove instance bucket info: "
+                          << cpp_strerror(retcode) << dendl;
+        return set_cr_error(retcode);
+        }
+    } else {
+      yield {
+        // if there are objects present, add the bucket entry to omap list 'deleted_buckets'
+        auto& pool = store->svc()->zone->get_zone_params().log_pool;
+        const bufferlist in_bl;
+        std::map<std::string, bufferlist> bucket_entry{{bucket_instance, in_bl}};
+        ldpp_dout(dpp, 10) << "storing bucket in omap: " << bucket_instance << dendl;
+        call(new RGWRadosSetOmapKeysCR(store, rgw_raw_obj(pool, oid_prefix), bucket_entry));
+        if (retcode < 0) {
+          ldpp_dout(dpp, 0) << "failed to store entry: " << bucket_instance
+                            << " in omap "
+                            << cpp_strerror(retcode) << dendl;
+          return set_cr_error(retcode);
+        }
+      }
     }
   }
 
@@ -1506,3 +1618,62 @@ int bilog_trim(const DoutPrefixProvider* p, rgw::sal::RadosStore* store,
   }
   return r;
 }
+
+int list_deleted_buckets(const DoutPrefixProvider* dpp,
+                        rgw::sal::RadosStore* store,
+                        std::set<std::string>& buckets,
+                        optional_yield y)
+{
+  auto& pool = store->svc()->zone->get_zone_params().log_pool;
+  librados::Rados& rados = *store->getRados()->get_rados_handle();
+  rgw_rados_ref ref;
+  int r = rgw_get_rados_ref(dpp, &rados, rgw_raw_obj(pool, oid_prefix), &ref);
+  if (r < 0) {
+    return r;
+  }
+
+  std::set<std::string> keys;
+  std::string start_after;
+  constexpr int max_items = 1024;
+  bool more = true;
+  int ret_val = 0;
+  while (more) {
+    librados::ObjectReadOperation op;
+    op.omap_get_keys2(start_after, max_items, &keys, &more, &ret_val);
+    r = rgw_rados_operate(dpp, ref.ioctx, ref.obj.oid, &op, nullptr, y);
+    if (r < 0) {
+      return r;
+    }
+    if (ret_val < 0) {
+      return ret_val;
+    }
+
+    buckets.merge(std::move(keys));
+  }
+  return 0;
+}
+
+int remove_deleted_buckets(const DoutPrefixProvider *dpp, 
+                          rgw::sal::RadosStore* store,
+                          const std::set<std::string> buckets,
+                          optional_yield y)
+{
+  auto& pool = store->svc()->zone->get_zone_params().log_pool;
+  librados::Rados& rados = *store->getRados()->get_rados_handle();
+  rgw_rados_ref ref;
+  int r = rgw_get_rados_ref(dpp, &rados, rgw_raw_obj(pool, oid_prefix), &ref);
+  if (r < 0) {
+    return r;
+  }
+
+  librados::ObjectWriteOperation op;
+  for(const auto& key : buckets) {
+    op.omap_rm_keys(std::set<std::string>({key}));
+    r = rgw_rados_operate(dpp, ref.ioctx, ref.obj.oid, &op, y);
+    if (r == -ENOENT) {
+      return 0;
+    }
+  }
+  return 0;
+}
+
