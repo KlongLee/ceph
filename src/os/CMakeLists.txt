@@ -15,6 +15,7 @@ if(WITH_BLUESTORE)
     bluestore/bluefs_types.cc
     bluestore/BlueRocksEnv.cc
     bluestore/BlueStore.cc
+    bluestore/BlueStore_debug.cc
     bluestore/simple_bitmap.cc
     bluestore/bluestore_types.cc
     bluestore/fastbmap_allocator_impl.cc
@@ -24,6 +25,9 @@ if(WITH_BLUESTORE)
     bluestore/AvlAllocator.cc
     bluestore/BtreeAllocator.cc
     bluestore/HybridAllocator.cc
+    bluestore/Writer.cc
+    bluestore/Compression.cc
+    bluestore/BlueAdmin.cc
   )
 endif(WITH_BLUESTORE)
 
@@ -40,7 +44,8 @@ endif()
 add_library(os STATIC ${libos_srcs})
 target_link_libraries(os
   legacy-option-headers
-  blk)
+  blk
+  ${FMT_LIB})
 
 target_link_libraries(os heap_profiler kv)
 
