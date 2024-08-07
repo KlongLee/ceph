@@ -188,10 +188,7 @@
               <option *ngIf="allsubvolgrps === null"
                       value=""
                       i18n>Loading...</option>
-              <option *ngIf="allsubvolgrps !== null && allsubvolgrps.length === 0"
-                      value=""
-                      i18n>-- No CephFS subvolume group available --</option>
-              <option *ngIf="allsubvolgrps !== null && allsubvolgrps.length > 0"
+              <option *ngIf="allsubvolgrps !== null"
                       value=""
                       i18n>-- Select the CephFS subvolume group --</option>
               <option *ngFor="let subvol_grp of allsubvolgrps"
@@ -205,7 +202,7 @@
            *ngIf="storageBackend === 'CEPH' && nfsForm.getValue('fsal').fs_name">
         <label class="cd-col-form-label"
                for="subvolume"
-               i18n>Subvolume</label>
+               i18n><span [ngClass]="{'required': nfsForm.getValue('subvolume_group') == defaultSubVolGroup}">Subvolume</span></label>
         <div class="cd-col-form-input">
           <select class="form-select"
                   formControlName="subvolume"
@@ -224,7 +221,10 @@
             <option *ngFor="let subvolume of allsubvols"
                     [value]="subvolume.name">{{ subvolume.name }}</option>
           </select>
-        </div>
+          <span *ngIf="nfsForm.getValue('subvolume_group') == 
+          defaultSubVolGroup && !nfsForm.getValue('subvolume')" class="invalid-feedback">SubVolume selection is required.
+          </span>
+          </div>
       </div>
 
         <!-- Path -->
@@ -251,7 +251,9 @@
             <span class="invalid-feedback"
                   *ngIf="nfsForm.showError('path', formDir, 'required')"
                   i18n>This field is required.</span>
-
+                  <span class="invalid-feedback"
+                  *ngIf="nfsForm.get('path').hasError('isolatedSlash') && nfsForm.get('path').touched"
+                  i18n>This field cannot be just a single "/".</span>
             <span class="invalid-feedback"
                   *ngIf="nfsForm.showError('path', formDir, 'pattern')"
                   i18n>Path need to start with a '/' and can be followed by a word</span>
