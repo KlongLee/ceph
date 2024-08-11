@@ -7,7 +7,11 @@
           novalidate>
 
       <div i18n="form title"
-           class="form-header">{{ action | titlecase }} {{ resource | upperFirst }}</div>
+           class="card-header">{{ action | titlecase }} {{ resource | upperFirst }} 
+           <cd-help-text>
+           <span *ngIf="action === 'Copy'">Copy the content of a source image into the newly created destination image</span> 
+          </cd-help-text>
+          </div>
 
       <!-- Parent -->
       <div class="form-item"
@@ -103,7 +107,7 @@
         <cd-alert-panel *ngIf="showMirrorDisableMessage"
                         spacingClass="mt-2"
                         [showTitle]="false"
-                        type="info">Mirroring can not be disabled on <b>Pool</b> mirror mode.
+                        type="info">Mirroring can not be disabled on <b>&nbsp;Pool&nbsp;</b> mirror mode.
                                     You need to change the mirror mode to enable this option.
         </cd-alert-panel>
         <cd-alert-panel *ngIf="currentPoolMirrorMode === 'disabled'"
