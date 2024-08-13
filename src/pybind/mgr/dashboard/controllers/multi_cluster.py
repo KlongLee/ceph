@@ -111,7 +111,7 @@ class MultiCluster(RESTController):
             prometheus_url = self._proxy('GET', url, 'api/multi-cluster/get_prometheus_api_url',
                                          token=cluster_token, verify=ssl_verify,
                                          cert=ssl_certificate)
-            
+            logger.info('prometheus_url: %s', prometheus_url)
             prometheus_access_info = self._proxy('GET', url,
                                                  'ui-api/multi-cluster/get_prometheus_access_info',  # noqa E501 #pylint: disable=line-too-long
                                                  token=cluster_token, verify=ssl_verify,
@@ -146,7 +146,7 @@ class MultiCluster(RESTController):
         return cors_endpoints_string
 
     def check_cluster_connection(self, url, payload, username, ssl_verify, ssl_certificate,
-                                 action):
+                                 action, cluster_token=None):
         try:
             hub_cluster_version = mgr.version.split('ceph version ')[1]
             multi_cluster_content = self._proxy('GET', url, 'api/multi-cluster/get_config',
@@ -184,6 +184,11 @@ class MultiCluster(RESTController):
 
         cluster_token = content['token']
 
+        if cluster_token:
+            self.check_connection_errors(url, cluster_token, ssl_verify, ssl_certificate, action)
+        return cluster_token
+
+    def check_connection_errors(self, url, cluster_token, ssl_verify, ssl_certificate, action):
         managed_by_clusters_content = self._proxy('GET', url, 'api/settings/MANAGED_BY_CLUSTERS',
                                                   token=cluster_token, verify=ssl_verify,
                                                   cert=ssl_certificate)
@@ -194,7 +199,32 @@ class MultiCluster(RESTController):
             raise DashboardException(msg='Cluster is already managed by another cluster',
                                      code='cluster_managed_by_another_cluster',
                                      component='multi-cluster')
-        return cluster_token
+
+        self.check_security_config(url, cluster_token, ssl_verify, ssl_certificate)
+
+    def check_security_config(self, url, cluster_token, ssl_verify, ssl_certificate):
+        remote_security_config_content = self._proxy('GET', url,
+                                                     'api/multi-cluster/get_security_config',
+                                                     token=cluster_token, verify=ssl_verify,
+                                                     cert=ssl_certificate)
+        local_security_config_content = self._get_security_config()
+
+        if remote_security_config_content and local_security_config_content:
+            remote_security_enabled = remote_security_config_content['security_enabled']
+            local_security_enabled = local_security_config_content['security_enabled']
+
+            def raise_mismatch_exception(config_name, local_enabled, remote_enabled):
+                enabled_on = "local" if local_enabled else "remote"
+                disabled_on = "remote" if local_enabled else "local"
+                raise DashboardException(
+                    msg=f'{config_name} is enabled on the {enabled_on} cluster, but not on the {disabled_on} cluster. '  # noqa E501 #pylint: disable=line-too-long
+                        f'Both clusters should either have {config_name} enabled or disabled.',
+                    code=f'{config_name.lower()}_mismatch', component='multi-cluster'
+                )
+
+            if remote_security_enabled != local_security_enabled:
+                raise_mismatch_exception('Security', local_security_enabled,
+                                         remote_security_enabled)
 
     def set_multi_cluster_config(self, fsid, username, url, cluster_alias, token,
                                  prometheus_url=None, ssl_verify=False, ssl_certificate=None,
@@ -254,9 +284,10 @@ class MultiCluster(RESTController):
     @UpdatePermission
     # pylint: disable=W0613
     def reconnect_cluster(self, url: str, username=None, password=None,
-                          ssl_verify=False, ssl_certificate=None, ttl=None):
+                          ssl_verify=False, ssl_certificate=None, ttl=None,
+                          cluster_token=None):
         multicluster_config = self.load_multi_cluster_config()
-        if username and password:
+        if username and password and cluster_token is None:
             payload = {
                 'username': username,
                 'password': password,
@@ -266,7 +297,11 @@ class MultiCluster(RESTController):
             cluster_token = self.check_cluster_connection(url, payload, username,
                                                           ssl_verify, ssl_certificate,
                                                           'reconnect')
+        else:
+            self.check_connection_errors(url, cluster_token, ssl_verify, ssl_certificate,
+                                         'reconnect')
 
+        if cluster_token:
             prometheus_url = self._proxy('GET', url, 'api/multi-cluster/get_prometheus_api_url',
                                          token=cluster_token, verify=ssl_verify,
                                          cert=ssl_certificate)
@@ -287,6 +322,7 @@ class MultiCluster(RESTController):
                             cluster['prometheus_access_info'] = prometheus_access_info
                             _remove_prometheus_targets(cluster['prometheus_url'])
                             time.sleep(5)
+                            cluster['prometheus_url'] = prometheus_url
                             _set_prometheus_targets(prometheus_url)
             Settings.MULTICLUSTER_CONFIG = json.dumps(multicluster_config)
         return True
@@ -397,25 +433,68 @@ class MultiCluster(RESTController):
 
     @Endpoint()
     @ReadPermission
+    def get_security_config(self):
+        return self._get_security_config()
+
+    def _get_security_config(self):
+        orch_backend = mgr.get_module_option_ex('orchestrator', 'orchestrator')
+        if orch_backend == 'cephadm':
+            cmd = {
+                'prefix': 'orch get-security-config',
+            }
+            ret_status, out, _ = mgr.mon_command(cmd)
+            if ret_status == 0 and out is not None:
+                security_info = json.loads(out)
+                security_enabled = security_info['security_enabled']
+                mgmt_gw_enabled = security_info['mgmt_gw_enabled']
+                return {
+                    'security_enabled': bool(security_enabled),
+                    'mgmt_gw_enabled': bool(mgmt_gw_enabled)
+                }
+        return None
+
+    @Endpoint()
+    @ReadPermission
     def get_prometheus_api_url(self):
+        security_content = self._get_security_config()
+        mgmt_gw_enabled = security_content['mgmt_gw_enabled']
         prometheus_url = Settings.PROMETHEUS_API_HOST
+
         if prometheus_url is not None:
-            # check if is url is already in IP format
+            if '.ceph-dashboard' in prometheus_url:
+                prometheus_url = prometheus_url.replace('.ceph-dashboard', '')
+            parsed_url = urlparse(prometheus_url)
+            hostname = parsed_url.hostname
             try:
-                url_parts = urlparse(prometheus_url)
-                ipaddress.ip_address(url_parts.hostname)
+                # Check if the hostname is already an IP address
+                ipaddress.ip_address(hostname)
                 valid_ip_url = True
             except ValueError:
                 valid_ip_url = False
-            if not valid_ip_url:
-                parsed_url = urlparse(prometheus_url)
-                hostname = parsed_url.hostname
-                orch = OrchClient.instance()
-                inventory_hosts = [host.to_json() for host in orch.hosts.list()]
-                for host in inventory_hosts:
-                    if host['hostname'] == hostname or host['hostname'] in hostname:
-                        node_ip = host['addr']
-                prometheus_url = prometheus_url.replace(hostname, node_ip)
+
+            if mgmt_gw_enabled:
+                # If management gateway is enabled and hostname is not an IP
+                if not valid_ip_url:
+                    orch = OrchClient.instance()
+                    inventory_hosts = [host.to_json() for host in orch.hosts.list()]
+                    for host in inventory_hosts:
+                        if host['hostname'] == hostname or hostname in host['hostname']:
+                            node_ip = host['addr']
+                            prometheus_url = node_ip  # we need just IP if mgmt gw is enabled
+                            break
+                else:
+                    prometheus_url = hostname  # we need just the node IP if mgmt gw is enabled
+                return prometheus_url
+            else:
+                # If management gateway is disabled, return complete URL with IP replaced hostname
+                if not valid_ip_url:
+                    orch = OrchClient.instance()
+                    inventory_hosts = [host.to_json() for host in orch.hosts.list()]
+                    for host in inventory_hosts:
+                        if host['hostname'] == hostname or hostname in host['hostname']:
+                            node_ip = host['addr']
+                            prometheus_url = prometheus_url.replace(hostname, node_ip)
+                            break
         return prometheus_url
 
 
@@ -429,9 +508,6 @@ class MultiClusterUi(RESTController):
     @Endpoint('GET')
     @ReadPermission
     def get_prometheus_access_info(self):
-        user = ''
-        password = ''
-        prometheus_cert = ''
         orch_backend = mgr.get_module_option_ex('orchestrator', 'orchestrator')
         if orch_backend == 'cephadm':
             cmd = {
@@ -442,19 +518,11 @@ class MultiClusterUi(RESTController):
                 prom_access_info = json.loads(out)
                 user = prom_access_info['user']
                 password = prom_access_info['password']
-
-            cert_cmd = {
-                'prefix': 'orch prometheus get-prometheus-cert',
-            }
-            ret, out, _ = mgr.mon_command(cert_cmd)
-            if ret == 0 and out is not None:
-                cert = json.loads(out)
-                prometheus_cert = cert
-
+                certificate = prom_access_info['certificate']
             return {
                 'user': user,
                 'password': password,
-                'certificate': prometheus_cert
+                'certificate': certificate
             }
         return None
 

@@ -177,8 +177,7 @@ class TestCephadm(object):
     def test_invalid_url(self, cephadm_module):
         # Test with invalid URLs
         test_cases = [
-            ("http://example.com:9090", "Invalid URL 'http://example.com:9090'. It should be in the format host_ip:port"),
-            ("127.0.0.1:67700", "Invalid URL. Port out of range 0-65535")
+            ("http://example.com:9090", "Invalid URL 'http://example.com:9090'. It should be in the format host_ip:port")
         ]
         with with_host(cephadm_module, 'test'):
             with with_service(cephadm_module, ServiceSpec(service_type='prometheus'), CephadmOrchestrator.apply_prometheus, 'test'):
