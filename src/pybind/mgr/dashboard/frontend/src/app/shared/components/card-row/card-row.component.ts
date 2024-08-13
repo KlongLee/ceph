@@ -34,6 +34,16 @@ export class CardRowComponent implements OnChanges {
       this.total = this.data.total;
     } else if (this.summaryType === 'iscsi') {
       this.total = this.data.up + this.data.down || 0;
+    } else if (this.summaryType === 'host') {
+      this.total = this.data.length;
+      for (let i = 0; i < this.total; i++) {
+        if (!this.data[i].status) {
+          // No status means it's active and healthy
+          this.data.up += 1;
+        } else {
+          this.data.down += 1;
+        }
+      }
     } else {
       this.total = this.data;
     }

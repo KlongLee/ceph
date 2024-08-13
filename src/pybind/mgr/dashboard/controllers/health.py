@@ -149,7 +149,7 @@ class HealthData(object):
             result['client_perf'] = self.client_perf()
 
         if self._has_permissions(Permission.READ, Scope.HOSTS):
-            result['hosts'] = self.host_count()
+            result['hosts'] = self.get_hosts()
 
         if self._has_permissions(Permission.READ, Scope.RGW):
             result['rgw'] = self.rgw_count()
@@ -211,8 +211,8 @@ class HealthData(object):
                     min_mdsmap_info[k] = partial_dict(v, ['state'])
         return fs_map
 
-    def host_count(self):
-        return len(get_hosts())
+    def get_hosts(self):
+        return get_hosts()
 
     def iscsi_daemons(self):
         up_counter = 0

@@ -20,6 +20,9 @@
         <ng-container *ngSwitchCase="'osd'">
           <ng-container *ngTemplateOutlet="osdSummary"></ng-container>
         </ng-container>
+        <ng-container *ngSwitchCase="'host'">
+          <ng-container *ngTemplateOutlet="hostSummary"></ng-container>
+        </ng-container>
         <ng-container *ngSwitchCase="'simplified'">
           <ng-container *ngTemplateOutlet="simplifiedSummary"></ng-container>
         </ng-container>
@@ -165,12 +168,22 @@
   </span>
 </ng-template>
 
-<ng-template #simplifiedSummary>
-  <span *ngIf="!dropdownTotalError else showErrorNum">
-    {{ data }}
-    <i class="text-success"
-       [ngClass]="[icons.success]"></i>
-  </span>
+<ng-template #hostSummary>
+  <ng-container *ngIf="!dropdownTotalError else showErrorNum">
+    <span>
+      {{ data.up }}
+      <i class="text-success"
+         *ngIf="data.up || data.up === 0"
+         [ngClass]="[icons.success]"></i>
+    </span>
+    <span *ngIf="data.down"
+          class="ms-2">
+         {{ data.down }}
+      <i class="text-danger"
+         [ngClass]="[icons.danger]">
+      </i>
+    </span>
+  </ng-container>
   <ng-template #showErrorNum>
     <span *ngIf="data - dropdownTotalError  > 0">
       {{ data - dropdownTotalError  }}
@@ -183,6 +196,14 @@
          [ngClass]="[icons.danger]"></i>
     </span>
   </ng-template>
+</ng-template>
+
+<ng-template #simplifiedSummary>
+  <span>
+    {{ data }}
+    <i class="text-success"
+       [ngClass]="[icons.success]"></i>
+  </span>
 </ng-template>
 
 <ng-template #noLinkTitle>
