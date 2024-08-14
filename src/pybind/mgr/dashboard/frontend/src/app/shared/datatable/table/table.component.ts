@@ -33,7 +33,7 @@ import { CdUserConfig } from '~/app/shared/models/cd-user-config';
 import { TimerService } from '~/app/shared/services/timer.service';
 import { TableActionsComponent } from '../table-actions/table-actions.component';
 import { TableDetailDirective } from '../directives/table-detail.directive';
-import { filter, map, throttleTime } from 'rxjs/operators';
+import { filter, map } from 'rxjs/operators';
 import { CdSortDirection } from '../../enum/cd-sort-direction';
 import { CdSortPropDir } from '../../models/cd-sort-prop-dir';
 
@@ -254,6 +254,22 @@ export class TableComponent implements AfterViewInit, OnInit, OnChanges, OnDestr
 
   private _expanded: any = undefined;
 
+  get sortable() {
+    return !!this.userConfig?.sorts;
+  }
+
+  get noData() {
+    return !this.rows?.length && !this.loadingIndicator;
+  }
+
+  get showSelectionColumn() {
+    return this.selectionType === 'multiClick';
+  }
+
+  get enableSingleSelect() {
+    return this.selectionType === 'single';
+  }
+
   /**
    * To prevent making changes to the original columns list, that might change
    * how the table is renderer a second time, we now clone that list into a
@@ -343,13 +359,6 @@ export class TableComponent implements AfterViewInit, OnInit, OnChanges, OnDestr
     return search.split(' ').filter((word) => word);
   }
 
-  shouldThrottle(): number {
-    if (this.autoReload === -1) {
-      return 500;
-    }
-    return 0;
-  }
-
   ngAfterViewInit(): void {
     if (this.tableActions?.dropDownActions?.length) {
       this.tableColumns = [
@@ -395,10 +404,6 @@ export class TableComponent implements AfterViewInit, OnInit, OnChanges, OnDestr
           }
           return true;
         }),
-        throttleTime(this.shouldThrottle(), undefined, {
-          leading: true,
-          trailing: false
-        })
       )
       .subscribe({
         next: (values) => {
@@ -419,7 +424,8 @@ export class TableComponent implements AfterViewInit, OnInit, OnChanges, OnDestr
                 tableItem.data = { ...tableItem.data, row: val };
 
                 if (this.hasDetails) {
-                  (tableItem.expandedData = val), (tableItem.expandedTemplate = this.rowDetailTpl);
+                  tableItem.expandedData = val;
+                  tableItem.expandedTemplate = this.rowDetailTpl;
                 }
               }
 
@@ -978,9 +984,9 @@ export class TableComponent implements AfterViewInit, OnInit, OnChanges, OnDestr
     }
   }
 
-  onSelect($event: any) {
-    const { selectedRowIndex } = $event;
+  onSelect(selectedRowIndex: number) {
     const selectedData = _.get(this.model.data?.[selectedRowIndex], [0, 'selected']);
+    this.model.selectRow(selectedRowIndex, true);
     if (this.selectionType === 'single') {
       this.selection.selected = [selectedData];
     } else {
@@ -989,24 +995,27 @@ export class TableComponent implements AfterViewInit, OnInit, OnChanges, OnDestr
     this.updateSelection.emit(this.selection);
   }
 
-  onSelectAll($event: TableModel) {
-    $event.rowsSelected.forEach((isSelected: boolean, rowIndex: number) =>
+  onSelectAll() {
+    this.model.selectAll(true);
+    this.model.rowsSelected.forEach((isSelected: boolean, rowIndex: number) =>
       this._toggleSelection(rowIndex, isSelected)
     );
     this.updateSelection.emit(this.selection);
+    this.cdRef.detectChanges();
   }
 
-  onDeselect($event: any) {
+  onDeselect(deselectedRowIndex: number) {
+    this.model.selectRow(deselectedRowIndex, false);
     if (this.selectionType === 'single') {
       return;
     }
-    const { deselectedRowIndex } = $event;
     this._toggleSelection(deselectedRowIndex, false);
     this.updateSelection.emit(this.selection);
   }
 
-  onDeselectAll($event: TableModel) {
-    $event.rowsSelected.forEach((isSelected: boolean, rowIndex: number) =>
+  onDeselectAll() {
+    this.model.selectAll(false);
+    this.model.rowsSelected.forEach((isSelected: boolean, rowIndex: number) =>
       this._toggleSelection(rowIndex, isSelected)
     );
     this.updateSelection.emit(this.selection);
@@ -1242,5 +1251,27 @@ export class TableComponent implements AfterViewInit, OnInit, OnChanges, OnDestr
     this.model.rowsExpanded = this.model.rowsExpanded.map(
       (_, rowIndex: number) => rowIndex === expandedRowIndex
     );
+  }
+
+  firstExpandedDataInRow(row: TableItem[]) {
+    const found = row.find((d) => d.expandedData);
+    if (found) {
+      return found.expandedData;
+    }
+    return found;
+  }
+
+  shouldExpandAsTable(row: TableItem[]) {
+    return row.some((d) => d.expandAsTable);
+  }
+
+  isRowExpandable(index: number) {
+		return this.model.data[index].some(d => d && d.expandedData);
+	}
+
+  trackByFn(id: string, _index: number, row: TableItem[]) {
+    const uniqueIdentifier =_.get(row, [0, 'data', 'row', id]);
+    // console.log('tracked --->', JSON.stringify(uniqueIdentifier));
+    return JSON.stringify(uniqueIdentifier);
   }
 }
