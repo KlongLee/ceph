@@ -5,6 +5,7 @@ import json
 import logging
 import base64
 import sys
+import requests
 from typing import Optional
 
 import cherrypy
@@ -172,12 +173,29 @@ class Auth(RESTController, ControllerAuthMixin):
                 if 'sub' in token_payload:
                     mgr.ACCESS_CTRL_DB.delete_user(token_payload['sub'])
                     mgr.ACCESS_CTRL_DB.save()
+                    self._oauth2_logout()
         redirect_url = '#/login'
         if mgr.SSO_DB.protocol == 'saml2':
             redirect_url = 'auth/saml2/slo'
         return {
             'redirect_url': redirect_url
         }
+
+    def _oauth2_logout(self):
+        idp_domain = "192.168.100.100:8080"
+        refresh_token = cherrypy.request.headers.get('X-Access-Token') #need to get actual refresh token from /token endpoint
+        client_id = 'oauth2-proxy'
+
+        logout_url = f"http://{idp_domain}/realms/ceph/protocol/openid-connect/logout"
+        payload = {
+            "client_id": client_id,
+            "refresh_token": refresh_token
+        }
+        # Perform the logout
+        response = requests.get(logout_url, data=payload, verify=False)
+
+        if response.status_code == 302 or response.status_code == 303 or response.status_code == 200:
+            raise cherrypy.HTTPRedirect('https://192.168.100.100:443/')
 
     def _get_login_url(self):
         if mgr.SSO_DB.protocol == 'saml2':
@@ -223,11 +241,14 @@ class Auth(RESTController, ControllerAuthMixin):
                 user = AuthManager.get_user(token_payload['sub'])
             except UserDoesNotExist:
                 user = mgr.ACCESS_CTRL_DB.create_user(token_payload['sub'], None, token_payload['name'], token_payload['email'])
-                if 'name' in token_payload: #change name to roles/groups
-                    user.set_roles([Role.map_to_system_roles(token_payload['name'])])
-                else: #if no role/group is provided set readonly as default
+                if 'resource_access' in token_payload:
+                    # Find the first value where the key is not 'account'
+                    user_roles = next(value for key, value in token_payload['resource_access'].items() if key != "account")
+                    if user_roles:
+                        user.set_roles([Role.map_to_system_roles(user_roles['roles'][0])])
+                else: #if no valid role is provided set readonly as default
                     user.set_roles([READ_ONLY_ROLE])
-                user.last_update=token_payload['iat'] #look to refresh token instead of modifying iat?
+                user.last_update=token_payload['iat'] #set user last update to token time issued
                 mgr.ACCESS_CTRL_DB.save()
             if user:
                 url_prefix = 'https' if mgr.get_localized_module_option('ssl') else 'http'

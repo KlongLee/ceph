@@ -201,7 +201,7 @@ class Role(object):
             closest_match = difflib.get_close_matches(role.lower(), SYSTEM_ROLES_NAMES[rn], n=1, cutoff=0.8)
             if closest_match:
                 matches.append(rn)
-        return matches[0] if matches else None
+        return matches[0] if matches else READ_ONLY_ROLE
 
 
 # static pre-defined system roles
