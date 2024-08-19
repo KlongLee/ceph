@@ -13,8 +13,10 @@ from typing import Optional
 
 import cherrypy
 
+from dashboard.services.access_control import READ_ONLY_ROLE, Role
+
 from .. import mgr
-from ..exceptions import ExpiredSignatureError, InvalidAlgorithmError, InvalidTokenError
+from ..exceptions import DashboardException, ExpiredSignatureError, InvalidAlgorithmError, InvalidTokenError
 from .access_control import LocalAuthenticator, UserDoesNotExist
 
 cherrypy.config.update({
@@ -286,3 +288,64 @@ class AuthManagerTool(cherrypy.Tool):
         if not AuthManager.authorize(username, sec_scope, sec_perms):
             raise cherrypy.HTTPError(403, "You don't have permissions to "
                                           "access that resource")
+
+class Oauth2JWTManager(object):
+    _token = ''
+    _token_payload = {}
+    logger = logging.getLogger('oauth2jwt')
+
+
+    @classmethod
+    def set_token(cls, token):
+        cls._token = token
+        cls.set_token_payload()
+        JwtManager.oauth2_token = True
+
+    @classmethod
+    def set_token_payload(cls, token_payload=None):
+        if token_payload:
+            cls._token_payload = token_payload
+        elif cls._token:
+            cls._token_payload = json.loads(base64.urlsafe_b64decode(cls._token.split(".")[1] + "===="))
+
+        if cls._token_payload:
+            JwtManager.oauth2_token = True
+
+    @classmethod
+    def get_token(cls):
+        return cls._token
+
+    @classmethod
+    def _create_user(cls):
+        user_roles = cls.get_user_roles()
+        user = mgr.ACCESS_CTRL_DB.create_user(cls._token_payload['sub'], None, cls._token_payload['name'], cls._token_payload['email'])
+        user.set_roles([Role.map_to_system_roles(user_roles[0])])
+
+        # set user last update to token time issued
+        user.last_update = cls._token_payload['iat']
+        mgr.ACCESS_CTRL_DB.save()
+
+    @classmethod
+    def get_user_roles(cls):
+        user_roles = []
+        # check for client roles
+        if 'resource_access' in cls._token_payload:
+            # Find the first value where the key is not 'account'
+            user_roles = next(value['roles'] for key, value in cls._token_payload['resource_access'].items() if key != "account")
+        # check for global roles
+        elif 'realm_access' in cls._token_payload:
+            user_roles = next(value['roles'] for _, value in cls._token_payload['realm_access'].items())
+        else:
+            raise DashboardException(f'Provided user roles, {user_roles} are not valid')
+        return user_roles
+
+    @classmethod
+    def get_user(cls):
+        if not 'sub' in cls._token_payload:
+            return None
+        try:
+            user = AuthManager.get_user(cls._token_payload['sub'])
+            return user
+        except UserDoesNotExist:
+            cls._create_user()
+
