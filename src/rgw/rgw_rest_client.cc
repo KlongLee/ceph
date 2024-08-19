@@ -403,7 +403,7 @@ int RGWRESTSimpleRequest::forward_request(const DoutPrefixProvider *dpp, const R
   scope_from_api_name(dpp, cct, host, api_name, &region, s);
 
   const char *maybe_payload_hash = info.env->get("HTTP_X_AMZ_CONTENT_SHA256");
-  if (maybe_payload_hash && s != "iam") {
+  if (inbl && inbl->length() > 0 && maybe_payload_hash && s != "iam") {
     new_env.set("HTTP_X_AMZ_CONTENT_SHA256", maybe_payload_hash);
   }
 
