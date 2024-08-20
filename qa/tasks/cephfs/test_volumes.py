@@ -2361,7 +2361,7 @@ class TestSubvolumes(TestVolumesHelper):
         get_earmark = self._fs_cmd("subvolume", "earmark", "get", self.volname, subvolume)
         self.assertEqual(get_earmark, earmark)
     
-    def test_subvolume_remove_earmark(self):
+    def test_subvolume_clear_earmark(self):
         # create subvolume
         subvolume = self._gen_subvol_name()
         self._fs_cmd("subvolume", "create", self.volname, subvolume)

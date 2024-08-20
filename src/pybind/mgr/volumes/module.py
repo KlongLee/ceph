@@ -811,7 +811,7 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
 
     @mgr_cmd_wrap
     def _cmd_fs_subvolume_earmark_rm(self, inbuf, cmd):
-        return self.vc.remove_earmark(vol_name=cmd['vol_name'],
+        return self.vc.clear_earmark(vol_name=cmd['vol_name'],
                                       sub_name=cmd['sub_name'],
                                       group_name=cmd.get('group_name', None),
                                       force=cmd.get('force', False))

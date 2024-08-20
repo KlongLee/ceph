@@ -9,7 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import cephfs
 
-from ceph.fs.earmarking import CephFSVolumeEarmarking
+from ceph.fs.earmarking import CephFSVolumeEarmarking  # type: ignore
 
 from mgr_util import CephfsClient
 
@@ -644,7 +644,7 @@ class VolumeClient(CephfsClient["Module"]):
                 ret = self.volume_exception_to_retval(ve)
         return ret
 
-    def remove_earmark(self, **kwargs):
+    def clear_earmark(self, **kwargs):
         ret       = 0, "", ""
         volname   = kwargs['vol_name']
         subvolname = kwargs['sub_name']
@@ -657,7 +657,7 @@ class VolumeClient(CephfsClient["Module"]):
                     with open_subvol(self.mgr, fs_handle, self.volspec, group, subvolname, SubvolumeOpType.USER_METADATA_REMOVE) as subvolume:
                         log.info("Rm earmark for subvolume %s", subvolume.path)
                         fs_earmark = CephFSVolumeEarmarking(fs_handle, subvolume.path)
-                        fs_earmark.remove_earmark()
+                        fs_earmark.clear_earmark()
         except VolumeException as ve:
             if not (ve.errno == -errno.ENOENT and force):
                 ret = self.volume_exception_to_retval(ve)

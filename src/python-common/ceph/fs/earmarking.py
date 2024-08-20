@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 XATTR_SUBVOLUME_EARMARK_NAME = 'user.ceph.subvolume.earmark'
 
 
-class EarmarkScope(enum.Enum):
+class EarmarkTopScope(enum.Enum):
     NFS = "nfs"
     SMB = "smb"
 
@@ -50,13 +50,13 @@ class CephFSVolumeEarmarking:
 
     def _handle_cephfs_error(self, e: Exception, action: str) -> None:
         if isinstance(e, ValueError):
-            raise EarmarkException(errno.EINVAL, f"Invalid earmark specified: {e}")
+            raise EarmarkException(errno.EINVAL, f"Invalid earmark specified: {e}") from e
         elif isinstance(e, OSError):
             log.error(f"Error {action} earmark: {e}")
-            raise EarmarkException(-e.errno, e.strerror)
+            raise EarmarkException(-e.errno, e.strerror) from e
         else:
             log.error(f"Unexpected error {action} earmark: {e}")
-            raise EarmarkException(errno.EIO, "Unexpected error")
+            raise EarmarkException(errno.EIO, "Unexpected error") from e
 
     def _validate_earmark(self, earmark: str) -> bool:
         """
@@ -66,15 +66,12 @@ class CephFSVolumeEarmarking:
         :param earmark: The earmark string to validate.
         :return: True if valid, False otherwise.
         """
-        if not earmark:
-            return True
-
-        if earmark in [EarmarkScope.NFS.value, EarmarkScope.SMB.value]:
+        if not earmark or earmark in (scope.value for scope in EarmarkTopScope):
             return True
 
         parts = earmark.split('.')
 
-        if parts[0] not in [EarmarkScope.NFS.value, EarmarkScope.SMB.value]:
+        if parts[0] not in (scope.value for scope in EarmarkTopScope):
             return False
 
         # Check if all parts are non-empty (to ensure valid dot-separated format)
@@ -87,8 +84,9 @@ class CephFSVolumeEarmarking:
                 .decode('utf-8')
             )
             return earmark_value
-        except Exception:
-            return ""  # No earmark set
+        except Exception as e:
+            self._handle_cephfs_error(e, "getting")
+            return None
 
     def set_earmark(self, earmark: str):
         # Validate the earmark before attempting to set it
@@ -106,5 +104,5 @@ class CephFSVolumeEarmarking:
         except Exception as e:
             self._handle_cephfs_error(e, "setting")
 
-    def remove_earmark(self) -> None:
+    def clear_earmark(self) -> None:
         self.set_earmark("")

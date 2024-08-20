@@ -2,9 +2,7 @@ import pytest
 import errno
 from unittest import mock
 
-# Import the class under test
-from ceph.fs.earmarking import CephFSVolumeEarmarking, EarmarkException, EarmarkScope
-
+from ceph.fs.earmarking import CephFSVolumeEarmarking, EarmarkException, EarmarkTopScope
 # Mock constants
 XATTR_SUBVOLUME_EARMARK_NAME = 'user.ceph.subvolume.earmark'
 
@@ -26,14 +24,26 @@ class TestCephFSVolumeEarmarking:
         mock_fs.getxattr.assert_called_once_with("/test/path", XATTR_SUBVOLUME_EARMARK_NAME)
 
     def test_get_earmark_no_earmark_set(self, earmarking, mock_fs):
-        mock_fs.getxattr.side_effect = Exception("No earmark set")
-
+        mock_fs.getxattr.return_value = b""
         result = earmarking.get_earmark()
+
         assert result == ""
         mock_fs.getxattr.assert_called_once_with("/test/path", XATTR_SUBVOLUME_EARMARK_NAME)
 
+    def test_get_earmark_error(self, earmarking, mock_fs):
+        mock_fs.getxattr.side_effect = OSError(errno.EIO, "I/O error")
+
+        with pytest.raises(EarmarkException) as excinfo:
+            earmarking.get_earmark()
+
+        assert excinfo.value.errno == -errno.EIO
+        assert "I/O error" in str(excinfo.value)
+
+        # Ensure that the getxattr method was called exactly once
+        mock_fs.getxattr.assert_called_once_with("/test/path", XATTR_SUBVOLUME_EARMARK_NAME)
+
     def test_set_earmark_success(self, earmarking, mock_fs):
-        earmarking.set_earmark(EarmarkScope.NFS.value)
+        earmarking.set_earmark(EarmarkTopScope.NFS.value)
         mock_fs.setxattr.assert_called_once_with(
             "/test/path", XATTR_SUBVOLUME_EARMARK_NAME, b"nfs", 0
         )
@@ -49,7 +59,7 @@ class TestCephFSVolumeEarmarking:
         mock_fs.setxattr.side_effect = OSError(errno.EIO, "I/O error")
 
         with pytest.raises(EarmarkException) as excinfo:
-            earmarking.set_earmark(EarmarkScope.NFS.value)
+            earmarking.set_earmark(EarmarkTopScope.NFS.value)
 
         assert excinfo.value.errno == -errno.EIO
         assert "I/O error" in str(excinfo.value)
@@ -57,17 +67,17 @@ class TestCephFSVolumeEarmarking:
             "/test/path", XATTR_SUBVOLUME_EARMARK_NAME, b"nfs", 0
         )
 
-    def test_remove_earmark_success(self, earmarking, mock_fs):
-        earmarking.remove_earmark()
+    def test_clear_earmark_success(self, earmarking, mock_fs):
+        earmarking.clear_earmark()
         mock_fs.setxattr.assert_called_once_with(
             "/test/path", XATTR_SUBVOLUME_EARMARK_NAME, b"", 0
         )
 
-    def test_remove_earmark_error(self, earmarking, mock_fs):
+    def test_clear_earmark_error(self, earmarking, mock_fs):
         mock_fs.setxattr.side_effect = OSError(errno.EIO, "I/O error")
 
         with pytest.raises(EarmarkException) as excinfo:
-            earmarking.remove_earmark()
+            earmarking.clear_earmark()
 
         assert excinfo.value.errno == -errno.EIO
         assert "I/O error" in str(excinfo.value)
