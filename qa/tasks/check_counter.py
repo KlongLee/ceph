@@ -6,6 +6,7 @@ from teuthology.task import Task
 from teuthology import misc
 
 from tasks import ceph_manager
+from tasks.cephfs.filesystem import MDSCluster
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +62,9 @@ class CheckCounter(Task):
         mon_manager = ceph_manager.CephManager(self.admin_remote, ctx=self.ctx, logger=log.getChild('ceph_manager'))
         active_mgr = json.loads(mon_manager.raw_cluster_cmd("mgr", "dump", "--format=json-pretty"))["active_name"]
 
+        mds_cluster = MDSCluster(self.ctx)
+        mds_info = mds_cluster.status().get_mds(daemon_id)
+
         for daemon_type, counters in targets.items():
             # List of 'a', 'b', 'c'...
             daemon_ids = list(misc.all_roles_of_type(self.ctx.cluster, daemon_type))
@@ -80,8 +84,22 @@ class CheckCounter(Task):
                 else:
                     log.debug("Getting stats from {0}".format(daemon_id))
 
-                manager = self.ctx.managers[cluster_name]
-                proc = manager.admin_socket(daemon_type, daemon_id, ["perf", "dump"])
+                if daemon_type == 'mds':
+                    if not mds_info:
+                        continue
+                    mds = f"mds.{mds_info['name']}"
+                    if mds_info['state'] != "up:active":
+                        log.debug(f"skipping {mds}")
+                        continue
+                    log.debug(f"Getting stats from {mds}")
+                    try:
+                        proc = mon_manager.raw_cluster_cmd("tell", mds, "perf", "dump",
+                                                           "--format=json-pretty")
+                    except CommandFailedError:
+                        log.debug(f"Failed do 'perf dump' on {mds}")
+                else:
+                    manager = self.ctx.managers[cluster_name]
+                    proc = manager.admin_socket(daemon_type, daemon_id, ["perf", "dump"])
                 response_data = proc.stdout.getvalue().strip()
                 if response_data:
                     perf_dump = json.loads(response_data)
