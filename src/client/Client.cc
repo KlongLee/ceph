@@ -11562,13 +11562,23 @@ int64_t Client::_write(Fh *f, int64_t offset, uint64_t size, const char *buf,
 
   // copy into fresh buffer (since our write may be resub, async)
   bufferlist bl;
+  size_t total_appended = 0;
   if (buf) {
     if (size > 0)
       bl.append(buf, size);
   } else if (iov){
     for (int i = 0; i < iovcnt; i++) {
       if (iov[i].iov_len > 0) {
-        bl.append((const char *)iov[i].iov_base, iov[i].iov_len);
+        if (iov[i].iov_len >= static_cast<size_t>(size) 
+        || total_appended >= static_cast<size_t>(size)) {
+          if (!(total_appended >= static_cast<size_t>(size))) {
+            bl.append((const char *)iov[i].iov_base, size - total_appended);
+          }
+          break;
+        } else {
+          bl.append((const char *)iov[i].iov_base, iov[i].iov_len);
+          total_appended += iov[i].iov_len;
+        }
       }
     }
   }
@@ -16022,7 +16032,7 @@ int64_t Client::ll_writev(struct Fh *fh, const struct iovec *iov, int iovcnt, in
   }
 
   std::scoped_lock cl(client_lock);
-  return _preadv_pwritev_locked(fh, iov, iovcnt, off, true, false);
+  return _preadv_pwritev_locked(fh, iov, iovcnt, off, true, true);
 }
 
 int64_t Client::ll_readv(struct Fh *fh, const struct iovec *iov, int iovcnt, int64_t off)
@@ -16038,7 +16048,7 @@ int64_t Client::ll_readv(struct Fh *fh, const struct iovec *iov, int iovcnt, int
   }
 
   std::scoped_lock cl(client_lock);
-  return _preadv_pwritev_locked(fh, iov, iovcnt, off, false, false);
+  return _preadv_pwritev_locked(fh, iov, iovcnt, off, false, true);
 }
 
 int64_t Client::ll_preadv_pwritev(struct Fh *fh, const struct iovec *iov,
