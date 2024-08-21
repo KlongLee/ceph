@@ -5,6 +5,7 @@ import logging
 import orchestrator
 from ceph.deployment.service_spec import PlacementSpec, SMBSpec
 from mgr_module import MgrModule, Option, OptionLevel
+from mgr_util import CephFSEarmarkResolver
 
 from . import (
     cli,
@@ -66,6 +67,7 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
             public_store or rados_store.RADOSConfigStore.init(self)
         )
         path_resolver = path_resolver or fs.CachingCephFSPathResolver(self)
+        earmark_resolver = CephFSEarmarkResolver(self)
         # Why the honk is the cast needed but path_resolver doesn't need it??
         # Sometimes mypy drives me batty.
         authorizer = cast(
@@ -78,6 +80,7 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
             path_resolver=path_resolver,
             authorizer=authorizer,
             orch=(self if update_orchestration else None),
+            earmark_resolver=earmark_resolver,
         )
 
     def _backend_store(self, store_conf: str = '') -> ConfigStore:

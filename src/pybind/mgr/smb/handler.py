@@ -18,6 +18,7 @@ import operator
 import time
 
 from ceph.deployment.service_spec import SMBSpec
+from ceph.fs.earmarking import EarmarkTopScope  # type: ignore
 
 from . import config_store, external, resources
 from .enums import (
@@ -47,6 +48,7 @@ from .proto import (
     OrchSubmitter,
     PathResolver,
     Simplified,
+    EarmarkResolver,
 )
 from .resources import SMBResource
 from .results import ErrorResult, Result, ResultGroup
@@ -324,6 +326,7 @@ class ClusterConfigHandler:
         path_resolver: Optional[PathResolver] = None,
         authorizer: Optional[AccessAuthorizer] = None,
         orch: Optional[OrchSubmitter] = None,
+        earmark_resolver: Optional[EarmarkResolver] = None,
     ) -> None:
         self.internal_store = internal_store
         self.public_store = public_store
@@ -335,6 +338,7 @@ class ClusterConfigHandler:
             authorizer = _FakeAuthorizer()
         self._authorizer: AccessAuthorizer = authorizer
         self._orch = orch  # if None, disables updating the spec via orch
+        self._earmark_resolver = earmark_resolver
         log.info(
             'Initialized new ClusterConfigHandler with'
             f' internal store {self.internal_store!r},'
@@ -473,7 +477,12 @@ class ClusterConfigHandler:
             elif isinstance(
                 resource, (resources.Share, resources.RemovedShare)
             ):
-                _check_share(resource, staging, self._path_resolver)
+                _check_share(
+                    resource,
+                    staging,
+                    self._path_resolver,
+                    self._earmark_resolver,
+                )
             elif isinstance(resource, resources.JoinAuth):
                 _check_join_auths(resource, staging)
             elif isinstance(resource, resources.UsersAndGroups):
@@ -811,7 +820,10 @@ def _check_cluster(cluster: ClusterRef, staging: _Staging) -> None:
 
 
 def _check_share(
-    share: ShareRef, staging: _Staging, resolver: PathResolver
+    share: ShareRef,
+    staging: _Staging,
+    resolver: PathResolver,
+    earmark_resolver: EarmarkResolver,
 ) -> None:
     """Check that the share resource can be updated."""
     if share.intent == Intent.REMOVED:
@@ -826,7 +838,7 @@ def _check_share(
         )
     assert share.cephfs is not None
     try:
-        resolver.resolve_exists(
+        volpath = resolver.resolve_exists(
             share.cephfs.volume,
             share.cephfs.subvolumegroup,
             share.cephfs.subvolume,
@@ -836,6 +848,22 @@ def _check_share(
         raise ErrorResult(
             share, msg="path is not a valid directory in volume"
         )
+    if earmark_resolver:
+        earmark = earmark_resolver.get_earmark(
+            volpath,
+            share.cephfs.volume,
+        )
+        if not earmark:
+            earmark_resolver.set_earmark(
+                volpath,
+                share.cephfs.volume,
+                EarmarkTopScope.SMB.value,
+            )
+        elif not earmark_resolver.check_earmark(earmark, EarmarkTopScope.SMB):
+            raise ErrorResult(
+                share,
+                msg=f"earmark is already been set by {earmark.split('.')[0]}",
+            )
     name_used_by = _share_name_in_use(staging, share)
     if name_used_by:
         raise ErrorResult(

@@ -225,7 +225,7 @@ class VolumeClient(CephfsClient["Module"]):
         gid        = kwargs['gid']
         mode       = kwargs['mode']
         isolate_nspace = kwargs['namespace_isolated']
-        earmark    = kwargs['earmark']
+        earmark    = kwargs['earmark'] or ''
 
         oct_mode = octal_str_to_decimal_int(mode)
 
@@ -249,7 +249,7 @@ class VolumeClient(CephfsClient["Module"]):
         gid        = kwargs['gid']
         mode       = kwargs['mode']
         isolate_nspace = kwargs['namespace_isolated']
-        earmark    = kwargs['earmark']
+        earmark    = kwargs['earmark'] or ''
 
         try:
             with open_volume(self, volname) as fs_handle:
@@ -630,7 +630,7 @@ class VolumeClient(CephfsClient["Module"]):
         subvolname = kwargs['sub_name']
         groupname = kwargs['group_name']
         force     = kwargs['force']
-        earmark   = kwargs['earmark']
+        earmark   = kwargs['earmark'] or ''
 
         try:
             with open_volume(self, volname) as fs_handle:
