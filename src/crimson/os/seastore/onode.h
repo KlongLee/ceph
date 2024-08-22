@@ -35,6 +35,8 @@ struct onode_layout_t {
   omap_root_le_t xattr_root;
 
   object_data_le_t object_data;
+  local_object_id_le_t local_object_id{LOCAL_OBJECT_ID_NULL};
+  uint8_t offset_bits{std::numeric_limits<uint8_t>::max()};
 
   char oi[MAX_OI_LENGTH];
   char ss[MAX_SS_LENGTH];
@@ -63,6 +65,8 @@ public:
   virtual const onode_layout_t &get_layout() const = 0;
   virtual ~Onode() = default;
 
+  virtual void update_local_object_id(Transaction&, local_object_id_t) = 0;
+  virtual void update_offset_bits(Transaction&) = 0;
   virtual void update_onode_size(Transaction&, uint32_t) = 0;
   virtual void update_omap_root(Transaction&, omap_root_t&) = 0;
   virtual void update_xattr_root(Transaction&, omap_root_t&) = 0;
