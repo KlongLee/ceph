@@ -17,6 +17,7 @@ template <typename node_key_t>
 struct op_context_t {
   Cache &cache;
   Transaction &trans;
+  int offset_bits;
 };
 
 constexpr uint16_t MAX_FIXEDKVBTREE_DEPTH = 8;

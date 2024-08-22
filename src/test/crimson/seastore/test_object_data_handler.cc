@@ -37,7 +37,20 @@ public:
     return true;
   }
   bool is_dirty() const { return dirty; }
-  laddr_t get_hint() const final {return L_ADDR_MIN; }
+  laddr_hint_t get_onode_data_hint(std::optional<local_object_id_t>, uint16_t) const final {
+    laddr_hint_t hint;
+    hint.addr = L_ADDR_MIN;
+    hint.collide_on_local_object_id();
+    hint.set_gen_random_policy();
+    return hint;
+  }
+  laddr_hint_t get_onode_metadata_hint(std::optional<local_object_id_t>) const final {
+    laddr_hint_t hint;
+    hint.addr = L_ADDR_MIN;
+    hint.collide_on_local_object_id();
+    hint.set_gen_random_policy();
+    return hint;
+  }
   ~TestOnode() final = default;
 
   void update_onode_size(Transaction &t, uint32_t size) final {
@@ -61,6 +74,18 @@ public:
   void update_object_data(Transaction &t, object_data_t &odata) final {
     with_mutable_layout(t, [&odata](onode_layout_t &mlayout) {
       mlayout.object_data.update(odata);
+    });
+  }
+
+  void update_local_object_id(Transaction &t, local_object_id_t id) final {
+    with_mutable_layout(t, [id](onode_layout_t &mlayout) {
+      mlayout.local_object_id = id;
+    });
+  }
+
+  void update_offset_bits(Transaction &t) final {
+    with_mutable_layout(t, [&t](onode_layout_t &mlayout) {
+      mlayout.offset_bits = t.get_offset_bits();
     });
   }
 
