@@ -297,8 +297,14 @@ struct FLTreeOnode final : Onode, Value {
     status = status_t::DELETED;
   }
 
-  laddr_t get_hint() const final {
-    return Value::get_hint();
+  laddr_hint_t get_onode_data_hint(
+    std::optional<local_object_id_t> id,
+    uint16_t offset_bits) const final {
+    return Value::get_onode_data_hint(id, offset_bits);
+  }
+  laddr_hint_t get_onode_metadata_hint(
+    std::optional<local_object_id_t> id) const final {
+    return Value::get_onode_metadata_hint(id);
   }
   ~FLTreeOnode() final {}
 };

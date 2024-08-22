@@ -56,7 +56,12 @@ class Onode : public boost::intrusive_ref_counter<
   boost::thread_unsafe_counter>
 {
 protected:
-  virtual laddr_t get_hint() const = 0;
+  virtual laddr_hint_t get_onode_data_hint(
+    std::optional<local_object_id_t> id,
+    uint16_t offset_bits) const = 0;
+  virtual laddr_hint_t get_onode_metadata_hint(
+    std::optional<local_object_id_t> id) const = 0;
+
   const hobject_t hobj;
 public:
   explicit Onode(const hobject_t &hobj) : hobj(hobj) {}
@@ -76,11 +81,27 @@ public:
   virtual void clear_object_info(Transaction&) = 0;
   virtual void clear_snapset(Transaction&) = 0;
 
-  laddr_t get_metadata_hint() const {
-    return get_hint();
+  // local object id doesn't use all of 32 bits internally,
+  // LOCAL_OBJECT_ID_NULL means this onode doesn't have
+  // local object id yet.
+  std::optional<local_object_id_t> get_local_object_id() const {
+    std::optional<local_object_id_t> id = std::nullopt;
+    if (auto loid = local_object_id_t(get_layout().local_object_id);
+        loid != LOCAL_OBJECT_ID_NULL) {
+      id = loid;
+    }
+    return id;
   }
-  laddr_t get_data_hint() const {
-    return get_hint();
+
+  laddr_hint_t get_metadata_hint() const {
+    return get_onode_metadata_hint(get_local_object_id());
+  }
+  laddr_hint_t get_data_hint(int offset_bits) const {
+    auto &layout = get_layout();
+    ceph_assert(layout.offset_bits == std::numeric_limits<uint8_t>::max() ||
+                // TODO: it's possible to change offset bits at runtime in the future.
+                offset_bits == (int)layout.offset_bits);
+    return get_onode_data_hint(get_local_object_id(), offset_bits);
   }
   friend std::ostream& operator<<(std::ostream &out, const Onode &rhs);
 };
