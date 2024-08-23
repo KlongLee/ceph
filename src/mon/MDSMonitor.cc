@@ -1557,6 +1557,16 @@ bool MDSMonitor::has_one_of_these_health_warnings(vector<mds_metric_t> warnings)
   return false;
 }
 
+bool MDSMonitor::has_health_warnings()
+{
+  for (auto& [gid, health] : pending_daemon_health) {
+    if (health.metrics.size() > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 int MDSMonitor::filesystem_command(
     FSMap &fsmap,
     MonOpRequestRef op,
