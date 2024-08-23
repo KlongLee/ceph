@@ -1094,6 +1094,14 @@ int Mirror<I>::mode_set(librados::IoCtx& io_ctx,
     return -EINVAL;
   }
 
+/*
+  if (next_mirror_mode != cls::rbd::MIRROR_MODE_DISABLED &&
+      !namespace_name.empty() && mirror_mode != RBD_MIRROR_MODE_IMAGE) {
+    lderr(cct) << "Mirroring to a different namespace is only allowed "
+               << "with image mode" << dendl;
+    return -EINVAL;
+  }
+  */
   int r;
   if (next_mirror_mode == cls::rbd::MIRROR_MODE_DISABLED) {
     // fail early if pool still has peers registered and attempting to disable
@@ -1108,6 +1116,7 @@ int Mirror<I>::mode_set(librados::IoCtx& io_ctx,
     }
   }
 
+  std::string current_namespace;
   cls::rbd::MirrorMode current_mirror_mode;
   r = cls_client::mirror_mode_get(&io_ctx, &current_mirror_mode);
   if (r < 0) {
@@ -1115,9 +1124,25 @@ int Mirror<I>::mode_set(librados::IoCtx& io_ctx,
                << dendl;
     return r;
   }
-
+/*
+  r = cls_client::mirror_remote_namespace_get(&io_ctx, &current_namespace);
+  if (r < 0 && r != -ENOENT) {
+    lderr(cct) << "failed to retrieve mirror namespace: " << cpp_strerror(r)
+               << dendl;
+    return r;
+  }
+*/
   if (current_mirror_mode == next_mirror_mode) {
-    return 0;
+  /*  if (current_mirror_mode != cls::rbd::MIRROR_MODE_DISABLED &&
+        current_namespace != namespace_name) {
+
+      ldout(cct, 20) << "current_ns=" << current_namespace
+                     << ", namespace_name=" << namespace_name  << dendl;
+      lderr(cct) << "Cannot change the namespace without disabling mirroring."
+	         << dendl;
+      return -EINVAL;
+    }*/
+    return 0; // Nothing more to be done
   } else if (current_mirror_mode == cls::rbd::MIRROR_MODE_DISABLED) {
     uuid_d uuid_gen;
     uuid_gen.generate_random();
@@ -1127,6 +1152,14 @@ int Mirror<I>::mode_set(librados::IoCtx& io_ctx,
                  << dendl;
       return r;
     }
+/*
+    r = cls_client::mirror_remote_namespace_set(&io_ctx, namespace_name);
+    if (r < 0) {
+      lderr(cct) << "failed to set remote namespace: " << cpp_strerror(r)
+	         << dendl;
+      return r;
+    }
+*/
   }
 
   if (current_mirror_mode != cls::rbd::MIRROR_MODE_IMAGE) {
@@ -1270,6 +1303,47 @@ int Mirror<I>::mode_set(librados::IoCtx& io_ctx,
   }
   return 0;
 }
+
+template <typename I>
+int Mirror<I>::remote_namespace_get(librados::IoCtx& io_ctx,
+                                    std::string* remote_namespace) {
+
+  CephContext *cct = reinterpret_cast<CephContext *>(io_ctx.cct());
+  ldout(cct, 20) << dendl;
+
+  int r = cls_client::mirror_remote_namespace_get(&io_ctx, remote_namespace);
+  if (r < 0 && r != -ENOENT) {
+    lderr(cct) << "failed to retrieve mirroring mode: " << cpp_strerror(r)
+               << dendl;
+    return r;
+  } 
+  return 0;
+}
+
+
+template <typename I>
+int Mirror<I>::remote_namespace_set(librados::IoCtx& io_ctx,
+                                    const std::string& remote_namespace) {
+  CephContext *cct = reinterpret_cast<CephContext *>(io_ctx.cct());
+  ldout(cct, 20) << dendl;
+  
+  std::string ns_name = io_ctx.get_namespace();
+
+  if (ns_name.empty() && !remote_namespace.empty()) {
+    lderr(cct) << "cannot set remote namespace for the default namespace."
+               << dendl;
+    return -EINVAL;
+  }
+
+  int r = cls_client::mirror_remote_namespace_set(&io_ctx, remote_namespace);
+  if (r < 0 ) {
+    lderr(cct) << "failed to set mirroring mode: " << cpp_strerror(r)
+               << dendl;
+    return r;
+  } 
+  return 0;
+}
+
 
 template <typename I>
 int Mirror<I>::uuid_get(librados::IoCtx& io_ctx, std::string* mirror_uuid) {

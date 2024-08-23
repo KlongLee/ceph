@@ -129,7 +129,8 @@ struct NamespaceReplayer<librbd::MockTestImageCtx> {
   static std::map<std::string, NamespaceReplayer *> s_instances;
 
   static NamespaceReplayer *create(
-      const std::string &name,
+      const std::string &local_name,
+      const std::string &remote_name,
       librados::IoCtx &local_ioctx,
       librados::IoCtx &remote_ioctx,
       const std::string &local_mirror_uuid,
@@ -141,9 +142,9 @@ struct NamespaceReplayer<librbd::MockTestImageCtx> {
       ServiceDaemon<librbd::MockTestImageCtx> *service_daemon,
       journal::CacheManagerHandler *cache_manager_handler,
       PoolMetaCache* pool_meta_cache) {
-    ceph_assert(s_instances.count(name));
-    auto namespace_replayer = s_instances[name];
-    s_instances.erase(name);
+    ceph_assert(s_instances.count(local_name));
+    auto namespace_replayer = s_instances[local_name];
+    s_instances.erase(local_name);
     return namespace_replayer;
   }
 
