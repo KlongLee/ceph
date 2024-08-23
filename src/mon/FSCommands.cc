@@ -110,8 +110,7 @@ class FailHandler : public FileSystemCommandHandler
 
   bool confirm = false;
   cmd_getval(cmdmap, "yes_i_really_mean_it", confirm);
-  if (!confirm &&
-      mon->mdsmon()->has_health_warnings({
+  if (!confirm && mon->mdsmon()->has_one_of_these_health_warnings({
 	MDS_HEALTH_TRIM, MDS_HEALTH_CACHE_OVERSIZED})) {
     ss << errmsg_for_unhealthy_mds;
     return -EPERM;
