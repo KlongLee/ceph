@@ -4952,37 +4952,6 @@ static int rgw_set_bucket_resharding(cls_method_context_t hctx, bufferlist *in, 
   return write_bucket_header(hctx, &header);
 }
 
-static int rgw_set_bucket_resharding2(cls_method_context_t hctx, bufferlist *in,  bufferlist *out)
-{
-  CLS_LOG(10, "entered %s", __func__);
-  cls_rgw_set_bucket_resharding_op op;
-
-  auto in_iter = in->cbegin();
-  try {
-    decode(op, in_iter);
-  } catch (ceph::buffer::error& err) {
-    CLS_LOG(1, "ERROR: cls_rgw_set_bucket_resharding: failed to decode entry\n");
-    return -EINVAL;
-  }
-
-  rgw_bucket_dir_header header;
-  int rc = read_bucket_header(hctx, &header);
-  if (rc < 0) {
-    CLS_LOG(1, "ERROR: %s: failed to read header", __func__);
-    return rc;
-  }
-
-  if (op.entry.reshard_status == cls_rgw_reshard_status::IN_LOGRECORD) {
-    if (header.reshardlog_entries != 0) {
-      CLS_LOG(1, "ERROR: %s: cannot set logrecord status on non-zero log record count", __func__);
-      return -EOPNOTSUPP;
-    }
-  }
-  header.new_instance.set_status(op.entry.reshard_status);
-
-  return write_bucket_header(hctx, &header);
-}
-
 static int rgw_clear_bucket_resharding(cls_method_context_t hctx, bufferlist *in,  bufferlist *out)
 {
   CLS_LOG(10, "entered %s", __func__);
@@ -5194,8 +5163,6 @@ CLS_INIT(rgw)
   /* resharding attribute  */
   cls_register_cxx_method(h_class, RGW_SET_BUCKET_RESHARDING, CLS_METHOD_RD | CLS_METHOD_WR,
 			  rgw_set_bucket_resharding, &h_rgw_set_bucket_resharding);
-  cls_register_cxx_method(h_class, RGW_SET_BUCKET_RESHARDING2, CLS_METHOD_RD | CLS_METHOD_WR,
-			  rgw_set_bucket_resharding2, &h_rgw_set_bucket_resharding);
   cls_register_cxx_method(h_class, RGW_CLEAR_BUCKET_RESHARDING, CLS_METHOD_RD | CLS_METHOD_WR,
 			  rgw_clear_bucket_resharding, &h_rgw_clear_bucket_resharding);
   cls_register_cxx_method(h_class, RGW_GUARD_BUCKET_RESHARDING, CLS_METHOD_RD ,
