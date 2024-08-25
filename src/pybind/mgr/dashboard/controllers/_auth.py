@@ -16,9 +16,3 @@ class ControllerAuthMixin:
         cherrypy.response.cookie['token']['HttpOnly'] = True
         cherrypy.response.cookie['token']['path'] = '/'
         cherrypy.response.cookie['token']['SameSite'] = 'Strict'
-
-    @staticmethod
-    def _delete_cookie(name, value):
-        cherrypy.response.cookie[name] = value
-        cherrypy.response.cookie[name]['expires'] = 0
-        cherrypy.response.cookie[name]['max-age'] = 0

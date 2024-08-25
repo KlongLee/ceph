@@ -34,6 +34,7 @@ from .services.auth import AuthManager, AuthManagerTool, JwtManager
 from .services.exception import dashboard_exception_handler
 from .services.service import RgwServiceManager
 from .services.sso import SSO_COMMANDS, handle_sso_command
+from .services.oauth2_sso import OAUTH2_SSO_COMMANDS, handle_oauth2_sso_command
 from .settings import handle_option_command, options_command_list, options_schema_list
 from .tools import NotificationQueue, RequestLoggingTool, TaskManager, \
     configure_cors, prepare_url_prefix, str_to_bool
@@ -258,6 +259,7 @@ class Module(MgrModule, CherryPyConfig):
     ]
     COMMANDS.extend(options_command_list())
     COMMANDS.extend(SSO_COMMANDS)
+    COMMANDS.extend(OAUTH2_SSO_COMMANDS)
     PLUGIN_MANAGER.hook.register_commands()
 
     MODULE_OPTIONS = [
@@ -497,6 +499,9 @@ class Module(MgrModule, CherryPyConfig):
         if res[0] != -errno.ENOSYS:
             return res
         res = handle_sso_command(cmd)
+        if res[0] != -errno.ENOSYS:
+            return res
+        res = handle_oauth2_sso_command(cmd)
         if res[0] != -errno.ENOSYS:
             return res
         if cmd['prefix'] == 'dashboard set-jwt-token-ttl':

@@ -9,6 +9,8 @@ import threading
 import warnings
 from urllib import parse
 
+from dashboard.services.oauth2_sso import Oauth2
+
 from .. import mgr
 from ..tools import prepare_url_prefix
 
@@ -46,10 +48,11 @@ class SsoDB(object):
     VERSION = 1
     SSODB_CONFIG_KEY = "ssodb_v"
 
-    def __init__(self, version, protocol, saml2):
+    def __init__(self, version, protocol, saml2, oauth2):
         self.version = version
         self.protocol = protocol
         self.saml2 = saml2
+        self.oauth2 = oauth2
         self.lock = threading.RLock()
 
     def save(self):
@@ -57,6 +60,7 @@ class SsoDB(object):
             db = {
                 'protocol': self.protocol,
                 'saml2': self.saml2.to_dict(),
+                'oauth2': self.oauth2.to_dict(),
                 'version': self.version
             }
             mgr.set_store(self.ssodb_config_key(), json.dumps(db))
@@ -79,14 +83,14 @@ class SsoDB(object):
         json_db = mgr.get_store(cls.ssodb_config_key(), None)
         if json_db is None:
             logger.debug("No DB v%s found, creating new...", cls.VERSION)
-            db = cls(cls.VERSION, '', Saml2({}))
+            db = cls(cls.VERSION, '', Saml2({}), Oauth2())
             # check if we can update from a previous version database
             db.check_and_update_db()
             return db
 
         dict_db = json.loads(json_db)  # type: dict
         return cls(dict_db['version'], dict_db.get('protocol'),
-                   Saml2.from_dict(dict_db.get('saml2')))
+                   Saml2.from_dict(dict_db.get('saml2')), Oauth2(dict_db.get('oauth2')))
 
 
 def load_sso_db():
@@ -162,8 +166,8 @@ def handle_sso_command(cmd):
             'use `ceph dashboard sso setup saml2`'
 
     if cmd['prefix'] == 'dashboard sso status':
-        if mgr.SSO_DB.protocol == 'saml2':
-            return 0, 'SSO is "enabled" with "SAML2" protocol.', ''
+        if not mgr.SSO_DB.protocol == '':
+            return 0, f'SSO is "enabled" with "{mgr.SSO_DB.protocol}" protocol.', ''
 
         return 0, 'SSO is "disabled".', ''
 

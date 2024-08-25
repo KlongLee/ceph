@@ -3,18 +3,14 @@
 import http.cookies
 import json
 import logging
-import base64
 import sys
 from typing import Optional
 
 import cherrypy
 
-from dashboard.services.orchestrator import OrchClient
-
 from .. import mgr
-from ..tools import prepare_url_prefix
 from ..exceptions import InvalidCredentialsError, UserDoesNotExist
-from ..services.auth import AuthManager, JwtManager, Oauth2JWTManager
+from ..services.auth import AuthManager, JwtManager
 from ..services.cluster import ClusterModel
 from ..settings import Settings
 from . import APIDoc, APIRouter, ControllerAuthMixin, EndpointDoc, RESTController, allow_empty_body
@@ -164,45 +160,20 @@ class Auth(RESTController, ControllerAuthMixin):
         token = JwtManager.get_token_from_header()
         JwtManager.blocklist_token(token)
         self._delete_token_cookie(token)
-        oauth2_cookie = cherrypy.request.cookie['_oauth2_proxy'] if '_oauth2_proxy' in cherrypy.request.cookie else None
-        if oauth2_cookie:
-            self._delete_cookie('_oauth2_proxy', oauth2_cookie.value)
-            if token:
-                token_payload = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "===="))
-                if 'sub' in token_payload:
-                    mgr.ACCESS_CTRL_DB.delete_user(token_payload['sub'])
-                    mgr.ACCESS_CTRL_DB.save()
-                    self._oauth2_logout()
         redirect_url = '#/login'
         if mgr.SSO_DB.protocol == 'saml2':
             redirect_url = 'auth/saml2/slo'
+        elif mgr.SSO_DB.protocol == 'oauth2':
+            redirect_url = 'auth/oauth2/logout'
         return {
             'redirect_url': redirect_url
         }
 
-    def _oauth2_logout(self):
-        '''
-        idp_domain = "192.168.100.100:8080"
-        refresh_token = cherrypy.request.headers.get('X-Access-Token') #need to get actual refresh token from /token endpoint
-        client_id = 'oauth2-proxy'
-
-        logout_url = f"http://{idp_domain}/realms/ceph/protocol/openid-connect/logout"
-        payload = {
-            "client_id": client_id,
-            "refresh_token": refresh_token
-        }
-        # Perform the logout
-        response = requests.get(logout_url, data=payload, verify=False)
-
-        if response.status_code == 302 or response.status_code == 303 or response.status_code == 200:
-            '''
-        url_prefix = prepare_url_prefix(mgr.get_module_option('url_prefix', default=''))
-        raise cherrypy.HTTPRedirect(f'{url_prefix}/#/sso/404')
-
-
     def _get_login_url(self):
         if mgr.SSO_DB.protocol == 'saml2':
             return 'auth/saml2/login'
+        elif mgr.SSO_DB.protocol == 'oauth2':
+            return 'auth/oauth2/login'
         return '#/login'
 
     @RESTController.Collection('POST', query_params=['token'])
@@ -210,39 +181,16 @@ class Auth(RESTController, ControllerAuthMixin):
                  parameters={'token': (str, 'Authentication Token')},
                  responses={201: AUTH_CHECK_SCHEMA})
     def check(self, token):
-        JwtManager.oauth2_token = False
-
-        def default_return():
-           return {
-                    'login_url': self._get_login_url(),
-                    'cluster_status': ClusterModel.from_db().dict()['status']
-                }
-
         if token:
             user = JwtManager.get_user(token)
             if user:
                 return {
                     'username': user.username,
                     'permissions': user.permissions_dict(),
-                    'sso': mgr.SSO_DB.protocol == 'saml2',
+                    'sso': mgr.SSO_DB.protocol == 'saml2' or 'oauth2',
                     'pwdUpdateRequired': user.pwd_update_required
                 }
-        elif hasattr(cherrypy.request, 'cookie') and '_oauth2_proxy' in cherrypy.request.cookie and \
-          cherrypy.request.cookie['_oauth2_proxy'].value:
-            orch = OrchClient()
-            if not orch.services.list_daemons(daemon_type='oauth2-proxy') or not orch.services.list_daemons(daemon_type='mgmt-gateway'):
-                logger.info('Can not access Dashboard with oauth2 SSO, mgmt-gateway and oauth2-proxy services are required')
-                return default_return()
-            access_token = cherrypy.request.headers.get('X-Access-Token')
-            if not access_token:
-                return default_return()
-            Oauth2JWTManager.set_token(access_token)
-            user = Oauth2JWTManager.get_user()
-            if user:
-                return {
-                    'username': user.username,
-                    'permissions': user.permissions_dict(),
-                    'sso': mgr.SSO_DB.protocol == 'saml2',
-                    'pwdUpdateRequired': user.pwd_update_required
-                }
-        return default_return()
+        return {
+            'login_url': self._get_login_url(),
+            'cluster_status': ClusterModel.from_db().dict()['status']
+        }

@@ -13,8 +13,6 @@ from typing import Optional
 
 import cherrypy
 
-from dashboard.services.access_control import READ_ONLY_ROLE, Role
-
 from .. import mgr
 from ..exceptions import DashboardException, ExpiredSignatureError, InvalidAlgorithmError, InvalidTokenError
 from .access_control import LocalAuthenticator, UserDoesNotExist
@@ -32,7 +30,6 @@ class JwtManager(object):
     JWT_TOKEN_TTL = 28800  # default 8 hours
     JWT_ALGORITHM = 'HS256'
     _secret = None
-    oauth2_token = False
 
     LOCAL_USER = threading.local()
 
@@ -71,16 +68,15 @@ class JwtManager(object):
 
     @classmethod
     def decode(cls, message, secret):
+        oauth2_sso_protocol = mgr.SSO_DB.protocol == 'oauth2'
         split_message = message.split(".")
         base64_header = split_message[0]
         base64_message = split_message[1]
         base64_secret = split_message[2]
 
-        # We add ==== as padding to ignore the requirement to have correct padding in
-        # the urlsafe_b64decode method.
-        decoded_header = json.loads(base64.urlsafe_b64decode(base64_header + "===="))
+        decoded_header = decode_jwt_segment(base64_header)
 
-        if decoded_header['alg'] != cls.JWT_ALGORITHM and (not cls.oauth2_token and decoded_header['alg'] == 'RS256'):
+        if decoded_header['alg'] != cls.JWT_ALGORITHM and not oauth2_sso_protocol:
             raise InvalidAlgorithmError()
 
         incoming_secret = ''
@@ -91,11 +87,11 @@ class JwtManager(object):
                 digestmod=hashlib.sha256
             ).digest()).decode('UTF-8').replace("=", "")
 
-        if base64_secret != incoming_secret and not cls.oauth2_token:
+        if base64_secret != incoming_secret and not oauth2_sso_protocol:
             raise InvalidTokenError()
 
-        decoded_message = json.loads(base64.urlsafe_b64decode(base64_message + "===="))
-        if decoded_header['alg'] == 'RS256' and cls.oauth2_token:
+        decoded_message = decode_jwt_segment(base64_message)
+        if decoded_header['alg'] == 'RS256' and oauth2_sso_protocol:
             decoded_message['username'] = decoded_message['sub']
         now = int(time.time())
         if decoded_message['exp'] < now:
@@ -130,7 +126,7 @@ class JwtManager(object):
     @classmethod
     def get_token_from_header(cls):
         auth_cookie_name = 'token'
-        if cls.oauth2_token:
+        if mgr.SSO_DB.protocol == 'oauth2':
             return cherrypy.request.headers.get('X-Access-Token')
         try:
             # use cookie
@@ -164,8 +160,7 @@ class JwtManager(object):
             dtoken = cls.decode_token(token)
             if 'jti' in dtoken and not cls.is_blocklisted(dtoken['jti']):
                 user = AuthManager.get_user(dtoken['username'])
-
-                if ('iat' in dtoken and user.last_update <= dtoken['iat']) or cls.oauth2_token:
+                if ('iat' in dtoken and user.last_update <= dtoken['iat']) or mgr.SSO_DB.protocol == 'oauth2':
                     return user
                 cls.logger.debug(  # type: ignore
                     "user info changed after token was issued, iat=%s last_update=%s",
@@ -183,7 +178,6 @@ class JwtManager(object):
             cls.logger.debug(  # type: ignore
                 "Invalid token: user %s does not exist", dtoken['username']
             )
-
         return None
 
     @classmethod
@@ -289,63 +283,54 @@ class AuthManagerTool(cherrypy.Tool):
             raise cherrypy.HTTPError(403, "You don't have permissions to "
                                           "access that resource")
 
-class Oauth2JWTManager(object):
-    _token = ''
-    _token_payload = {}
-    logger = logging.getLogger('oauth2jwt')
+class Oauth2JWTManager:
 
+    def __init__(self, token) -> None:
+        self.token = token;
+        self.token_payload = self.get_token_payload()
+        pass
 
-    @classmethod
-    def set_token(cls, token):
-        cls._token = token
-        cls.set_token_payload()
-        JwtManager.oauth2_token = True
+    def set_token(self, token):
+        self.token = token
 
-    @classmethod
-    def set_token_payload(cls, token_payload=None):
-        if token_payload:
-            cls._token_payload = token_payload
-        elif cls._token:
-            cls._token_payload = json.loads(base64.urlsafe_b64decode(cls._token.split(".")[1] + "===="))
+    def get_token_payload(self):
+        if self.token:
+            return decode_jwt_segment(self.token.split(".")[1])
+        return {}
 
-        if cls._token_payload:
-            JwtManager.oauth2_token = True
-
-    @classmethod
-    def get_token(cls):
-        return cls._token
-
-    @classmethod
-    def _create_user(cls):
-        user_roles = cls.get_user_roles()
-        user = mgr.ACCESS_CTRL_DB.create_user(cls._token_payload['sub'], None, cls._token_payload['name'], cls._token_payload['email'])
-        user.set_roles([Role.map_to_system_roles(user_roles[0])])
-
-        # set user last update to token time issued
-        user.last_update = cls._token_payload['iat']
-        mgr.ACCESS_CTRL_DB.save()
-
-    @classmethod
-    def get_user_roles(cls):
+    def get_user_roles(self):
         user_roles = []
         # check for client roles
-        if 'resource_access' in cls._token_payload:
+        if 'resource_access' in self.token_payload:
             # Find the first value where the key is not 'account'
-            user_roles = next(value['roles'] for key, value in cls._token_payload['resource_access'].items() if key != "account")
+            user_roles = next((value['roles'] for key, value in self.token_payload['resource_access'].items() if key != "account"), user_roles)
         # check for global roles
-        elif 'realm_access' in cls._token_payload:
-            user_roles = next(value['roles'] for _, value in cls._token_payload['realm_access'].items())
+        elif 'realm_access' in self.token_payload:
+            user_roles = next((value['roles'] for _, value in self.token_payload['realm_access'].items()), user_roles)
         else:
             raise DashboardException(f'Provided user roles, {user_roles} are not valid')
         return user_roles
 
-    @classmethod
-    def get_user(cls):
-        if not 'sub' in cls._token_payload:
+    def get_user(self):
+        if not 'sub' in self.token_payload:
             return None
         try:
-            user = AuthManager.get_user(cls._token_payload['sub'])
+            user = AuthManager.get_user(self.token_payload['sub'])
             return user
         except UserDoesNotExist:
-            cls._create_user()
+            self._create_user()
 
+    def _create_user(self):
+        user_roles = self.get_user_roles()
+        user = mgr.ACCESS_CTRL_DB.create_user(self.token_payload['sub'], None, self.token_payload['name'], self.token_payload['email'])
+        user.set_roles(user_roles)
+
+        # set user last update to token time issued
+        user.last_update = self.token_payload['iat']
+        mgr.ACCESS_CTRL_DB.save()
+
+
+def decode_jwt_segment(encoded_segment: str):
+    # We add ==== as padding to ignore the requirement to have correct padding in
+    # the urlsafe_b64decode method.
+    return json.loads(base64.urlsafe_b64decode(encoded_segment + "===="))
