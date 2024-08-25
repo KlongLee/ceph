@@ -1353,7 +1353,7 @@ int rgw_bucket_complete_op(cls_method_context_t hctx, bufferlist *in, bufferlist
 
 template <class T>
 static int write_entry(cls_method_context_t hctx, T& entry, const string& key,
-                       uint32_t& reshardlog_entries, const bool is_resharding = false)
+                       rgw_bucket_dir_header& header)
 {
   bufferlist bl;
   encode(entry, bl);
@@ -1361,11 +1361,27 @@ static int write_entry(cls_method_context_t hctx, T& entry, const string& key,
   if (ret < 0) {
     return ret;
   }
-  if (is_resharding) {
+  if (header.resharding_in_logrecord()) {
     ret = reshard_log_index_operation(hctx, key, entry.key, &bl);
-    reshardlog_entries++;
+    header.reshardlog_entries++;
   }
   return ret;
+}
+
+static int remove_entry(cls_method_context_t hctx, const string& idx,
+                        const cls_rgw_obj_key& key,
+                        rgw_bucket_dir_header& header)
+{
+  int ret = cls_cxx_map_remove_key(hctx, idx);
+  if (ret < 0) {
+    CLS_LOG(0, "ERROR: cls_cxx_map_remove_key() idx=%s ret=%d", idx.c_str(), ret);
+    return ret;
+  }
+  if (header.resharding_in_logrecord()) {
+    bufferlist empty;
+    return reshard_log_index_operation(hctx, idx, key, &empty);
+  }
+  return 0;
 }
 
 static int read_olh(cls_method_context_t hctx,cls_rgw_obj_key& obj_key, rgw_bucket_olh_entry *olh_data_entry, string *index_key, bool *found)
@@ -1399,13 +1415,12 @@ static void update_olh_log(rgw_bucket_olh_entry& olh_data_entry, OLHLogOp op, co
 }
 
 static int write_obj_instance_entry(cls_method_context_t hctx, rgw_bucket_dir_entry& instance_entry,
-                                    const string& instance_idx, uint32_t& reshardlog_entries,
-                                    bool is_resharding)
+                                    const string& instance_idx, rgw_bucket_dir_header& header)
 {
   CLS_LOG(20, "write_entry() instance=%s idx=%s flags=%d", escape_str(instance_entry.key.instance).c_str(),
           instance_idx.c_str(), instance_entry.flags);
   /* write the instance entry */
-  int ret = write_entry(hctx, instance_entry, instance_idx, reshardlog_entries, is_resharding);
+  int ret = write_entry(hctx, instance_entry, instance_idx, header);
   if (ret < 0) {
     CLS_LOG(0, "ERROR: write_entry() instance_key=%s ret=%d", escape_str(instance_idx).c_str(), ret);
     return ret;
@@ -1417,10 +1432,9 @@ static int write_obj_instance_entry(cls_method_context_t hctx, rgw_bucket_dir_en
  * write object instance entry, and if needed also the list entry
  */
 static int write_obj_entries(cls_method_context_t hctx, rgw_bucket_dir_entry& instance_entry,
-                             const string& instance_idx, uint32_t& reshardlog_entries,
-                             bool is_resharding)
+                             const string& instance_idx, rgw_bucket_dir_header& header)
 {
-  int ret = write_obj_instance_entry(hctx, instance_entry, instance_idx, reshardlog_entries, is_resharding);
+  int ret = write_obj_instance_entry(hctx, instance_entry, instance_idx, header);
   if (ret < 0) {
     return ret;
   }
@@ -1430,7 +1444,7 @@ static int write_obj_entries(cls_method_context_t hctx, rgw_bucket_dir_entry& in
   if (instance_idx != instance_list_idx) {
     CLS_LOG(20, "write_entry() idx=%s flags=%d", escape_str(instance_list_idx).c_str(), instance_entry.flags);
     /* write a new list entry for the object instance */
-    ret = write_entry(hctx, instance_entry, instance_list_idx, reshardlog_entries, is_resharding);
+    ret = write_entry(hctx, instance_entry, instance_list_idx, header);
     if (ret < 0) {
       CLS_LOG(0, "ERROR: write_entry() instance=%s instance_list_idx=%s ret=%d", instance_entry.key.instance.c_str(), instance_list_idx.c_str(), ret);
       return ret;
@@ -1486,40 +1500,32 @@ public:
     instance_entry.versioned_epoch = epoch;
   }
 
-  int unlink_list_entry(bool is_resharding) {
+  int unlink_list_entry(rgw_bucket_dir_header& header) {
     string list_idx, list_sub_ver;
     /* this instance has a previous list entry, remove that entry */
     get_list_index_key(instance_entry, &list_idx);
     CLS_LOG(20, "unlink_list_entry() list_idx=%s", escape_str(list_idx).c_str());
-    int ret = cls_cxx_map_remove_key(hctx, list_idx);
+    int ret = remove_entry(hctx, list_idx, instance_entry.key, header);
     if (ret < 0) {
-      CLS_LOG(0, "ERROR: cls_cxx_map_remove_key() list_idx=%s ret=%d", list_idx.c_str(), ret);
+      CLS_LOG(0, "ERROR: remove_entry() list_idx=%s ret=%d", list_idx.c_str(), ret);
       return ret;
-    }
-    if (is_resharding) {
-      bufferlist empty;
-      return reshard_log_index_operation(hctx, list_idx, instance_entry.key, &empty);
     }
     return 0;
   }
 
-  int unlink(bool is_resharding, const cls_rgw_obj_key& key) {
+  int unlink(rgw_bucket_dir_header& header, const cls_rgw_obj_key& key) {
     /* remove the instance entry */
     CLS_LOG(20, "unlink() idx=%s", escape_str(instance_idx).c_str());
-    int ret = cls_cxx_map_remove_key(hctx, instance_idx);
+    int ret = remove_entry(hctx, instance_idx, key, header);
     if (ret < 0) {
-      CLS_LOG(0, "ERROR: cls_cxx_map_remove_key() instance_idx=%s ret=%d", instance_idx.c_str(), ret);
+      CLS_LOG(0, "ERROR: remove_entry() instance_idx=%s ret=%d", instance_idx.c_str(), ret);
       return ret;
-    }
-    if (is_resharding) {
-      bufferlist empty;
-      return reshard_log_index_operation(hctx, instance_idx, key, &empty);
     }
     return 0;
   }
 
   int write_entries(uint64_t flags_set, uint64_t flags_reset,
-                    uint32_t& reshardlog_entries, bool is_resharding) {
+                    rgw_bucket_dir_header& header) {
     if (!initialized) {
       int ret = init();
       if (ret < 0) {
@@ -1532,7 +1538,7 @@ public:
     /* write the instance and list entries */
     bool special_delete_marker_key = (instance_entry.is_delete_marker() && instance_entry.key.instance.empty());
     encode_obj_versioned_data_key(key, &instance_idx, special_delete_marker_key);
-    int ret = write_obj_entries(hctx, instance_entry, instance_idx, reshardlog_entries, is_resharding);
+    int ret = write_obj_entries(hctx, instance_entry, instance_idx, header);
     if (ret < 0) {
       CLS_LOG(0, "ERROR: write_obj_entries() instance_idx=%s ret=%d", instance_idx.c_str(), ret);
       return ret;
@@ -1541,11 +1547,11 @@ public:
     return 0;
   }
 
-  int write(uint64_t epoch, bool current, uint32_t& reshardlog_entries, bool is_resharding) {
+  int write(uint64_t epoch, bool current, rgw_bucket_dir_header& header) {
     if (instance_entry.versioned_epoch > 0) {
       CLS_LOG(20, "%s: instance_entry.versioned_epoch=%d epoch=%d", __func__, (int)instance_entry.versioned_epoch, (int)epoch);
       /* this instance has a previous list entry, remove that entry */
-      int ret = unlink_list_entry(is_resharding);
+      int ret = unlink_list_entry(header);
       if (ret < 0) {
         return ret;
       }
@@ -1557,11 +1563,11 @@ public:
     }
 
     instance_entry.versioned_epoch = epoch;
-    return write_entries(flags, 0, reshardlog_entries, is_resharding);
+    return write_entries(flags, 0, header);
   }
 
-  int demote_current(uint32_t& reshardlog_entries, bool is_resharding) {
-    return write_entries(0, rgw_bucket_dir_entry::FLAG_CURRENT, reshardlog_entries, is_resharding);
+  int demote_current(rgw_bucket_dir_header& header) {
+    return write_entries(0, rgw_bucket_dir_entry::FLAG_CURRENT, header);
   }
 
   bool is_delete_marker() {
@@ -1663,9 +1669,9 @@ public:
     olh_data_entry.key = key;
   }
 
-  int write(uint32_t& reshardlog_entries, bool is_resharding) {
+  int write(rgw_bucket_dir_header& header) {
     /* write the olh data entry */
-    int ret = write_entry(hctx, olh_data_entry, olh_data_idx, reshardlog_entries, is_resharding);
+    int ret = write_entry(hctx, olh_data_entry, olh_data_idx, header);
     if (ret < 0) {
       CLS_LOG(0, "ERROR: write_entry() olh_key=%s ret=%d", olh_data_idx.c_str(), ret);
       return ret;
@@ -1700,12 +1706,12 @@ public:
 };
 
 static int write_version_marker(cls_method_context_t hctx, cls_rgw_obj_key& key,
-                                uint32_t& reshardlog_entries, bool is_resharding)
+                                rgw_bucket_dir_header& header)
 {
   rgw_bucket_dir_entry entry;
   entry.key = key;
   entry.flags = rgw_bucket_dir_entry::FLAG_VER_MARKER;
-  int ret = write_entry(hctx, entry, key.name, reshardlog_entries, is_resharding);
+  int ret = write_entry(hctx, entry, key.name, header);
   if (ret < 0) {
     CLS_LOG(0, "ERROR: write_entry returned ret=%d", ret);
     return ret;
@@ -1723,8 +1729,7 @@ static int convert_plain_entry_to_versioned(cls_method_context_t hctx,
                                             cls_rgw_obj_key& key,
                                             bool demote_current,
                                             bool instance_only,
-                                            uint32_t& reshardlog_entries,
-                                            bool is_resharding)
+                                            rgw_bucket_dir_header& header)
 {
   if (!key.instance.empty()) {
     return -EINVAL;
@@ -1751,9 +1756,9 @@ static int convert_plain_entry_to_versioned(cls_method_context_t hctx,
     encode_obj_versioned_data_key(key, &new_idx);
 
     if (instance_only) {
-      ret = write_obj_instance_entry(hctx, entry, new_idx, reshardlog_entries, is_resharding);
+      ret = write_obj_instance_entry(hctx, entry, new_idx, header);
     } else {
-      ret = write_obj_entries(hctx, entry, new_idx, reshardlog_entries, is_resharding);
+      ret = write_obj_entries(hctx, entry, new_idx, header);
     }
     if (ret < 0) {
       CLS_LOG(0, "ERROR: write_obj_entries new_idx=%s returned %d",
@@ -1762,7 +1767,7 @@ static int convert_plain_entry_to_versioned(cls_method_context_t hctx,
     }
   }
 
-  ret = write_version_marker(hctx, key, reshardlog_entries, is_resharding);
+  ret = write_version_marker(hctx, key, header);
   if (ret < 0) {
     return ret;
   }
@@ -1882,7 +1887,7 @@ static int rgw_bucket_link_olh(cls_method_context_t hctx, bufferlist *in, buffer
 					      * entry */
     existed = (ret >= 0 && !other_obj.is_delete_marker());
     if (ret >= 0 && other_obj.is_delete_marker() != op.delete_marker) {
-      ret = other_obj.unlink_list_entry(header.resharding_in_logrecord());
+      ret = other_obj.unlink_list_entry(header);
       if (ret < 0) {
         return ret;
       }
@@ -1890,7 +1895,7 @@ static int rgw_bucket_link_olh(cls_method_context_t hctx, bufferlist *in, buffer
 
     removing = existed && op.delete_marker;
     if (!removing) {
-      ret = other_obj.unlink(header.resharding_in_logrecord(), op.key);
+      ret = other_obj.unlink(header, op.key);
       if (ret < 0) {
         return ret;
       }
@@ -1916,7 +1921,7 @@ static int rgw_bucket_link_olh(cls_method_context_t hctx, bufferlist *in, buffer
   const uint64_t prev_epoch = olh.get_epoch();
 
   if (!olh.start_modify(op.olh_epoch)) {
-    ret = obj.write(op.olh_epoch, false, header.reshardlog_entries, header.resharding_in_logrecord());
+    ret = obj.write(op.olh_epoch, false, header);
     if (ret < 0) {
       return ret;
     }
@@ -1948,7 +1953,7 @@ static int rgw_bucket_link_olh(cls_method_context_t hctx, bufferlist *in, buffer
       if (!(olh_entry.key == op.key)) {
         BIVerObjEntry old_obj(hctx, olh_entry.key);
 
-        ret = old_obj.demote_current(header.reshardlog_entries, header.resharding_in_logrecord());
+        ret = old_obj.demote_current(header);
         if (ret < 0) {
           CLS_LOG(0, "ERROR: could not demote current on previous key ret=%d", ret);
           return ret;
@@ -1959,9 +1964,7 @@ static int rgw_bucket_link_olh(cls_method_context_t hctx, bufferlist *in, buffer
   } else {
     bool instance_only = (op.key.instance.empty() && op.delete_marker);
     cls_rgw_obj_key key(op.key.name);
-    ret = convert_plain_entry_to_versioned(hctx, key, promote, instance_only,
-                                           header.reshardlog_entries,
-                                           header.resharding_in_logrecord());
+    ret = convert_plain_entry_to_versioned(hctx, key, promote, instance_only, header);
     if (ret < 0) {
       CLS_LOG(0, "ERROR: convert_plain_entry_to_versioned ret=%d", ret);
       return ret;
@@ -1983,15 +1986,14 @@ static int rgw_bucket_link_olh(cls_method_context_t hctx, bufferlist *in, buffer
   }
   olh.set_exists(true);
 
-  ret = olh.write(header.reshardlog_entries, header.resharding_in_logrecord());
+  ret = olh.write(header);
   if (ret < 0) {
     CLS_LOG(0, "ERROR: failed to update olh ret=%d", ret);
     return ret;
   }
 
   /* write the instance and list entries */
-  ret = obj.write(olh.get_epoch(), promote, header.reshardlog_entries,
-                  header.resharding_in_logrecord());
+  ret = obj.write(olh.get_epoch(), promote, header);
   if (ret < 0) {
     return ret;
   }
@@ -2074,9 +2076,7 @@ static int rgw_bucket_unlink_instance(cls_method_context_t hctx, bufferlist *in,
   if (!olh_found) {
     bool instance_only = false;
     cls_rgw_obj_key key(dest_key.name);
-    ret = convert_plain_entry_to_versioned(hctx, key, true, instance_only,
-                                           header.reshardlog_entries,
-                                           header.resharding_in_logrecord());
+    ret = convert_plain_entry_to_versioned(hctx, key, true, instance_only, header);
     if (ret < 0) {
       CLS_LOG(0, "ERROR: convert_plain_entry_to_versioned ret=%d", ret);
       return ret;
@@ -2088,7 +2088,7 @@ static int rgw_bucket_unlink_instance(cls_method_context_t hctx, bufferlist *in,
   }
 
   if (!olh.start_modify(op.olh_epoch)) {
-    ret = obj.unlink_list_entry(header.resharding_in_logrecord());
+    ret = obj.unlink_list_entry(header);
     if (ret < 0) {
       return ret;
     }
@@ -2098,7 +2098,7 @@ static int rgw_bucket_unlink_instance(cls_method_context_t hctx, bufferlist *in,
     }
 
     olh.update_log(CLS_RGW_OLH_OP_REMOVE_INSTANCE, op.op_tag, op.key, false, op.olh_epoch);
-    return olh.write(header.reshardlog_entries, header.resharding_in_logrecord());
+    return olh.write(header);
   }
 
   rgw_bucket_olh_entry& olh_entry = olh.get_entry();
@@ -2118,8 +2118,7 @@ static int rgw_bucket_unlink_instance(cls_method_context_t hctx, bufferlist *in,
 
     if (found) {
       BIVerObjEntry next(hctx, next_key);
-      ret = next.write(olh.get_epoch(), true, header.reshardlog_entries,
-                       header.resharding_in_logrecord());
+      ret = next.write(olh.get_epoch(), true, header);
       if (ret < 0) {
         CLS_LOG(0, "ERROR: next.write() returned ret=%d", ret);
         return ret;
@@ -2146,18 +2145,18 @@ static int rgw_bucket_unlink_instance(cls_method_context_t hctx, bufferlist *in,
   } else {
     /* this is a delete marker, it's our responsibility to remove its
      * instance entry */
-    ret = obj.unlink(header.resharding_in_logrecord(), op.key);
+    ret = obj.unlink(header, op.key);
     if (ret < 0) {
       return ret;
     }
   }
 
-  ret = obj.unlink_list_entry(header.resharding_in_logrecord());
+  ret = obj.unlink_list_entry(header);
   if (ret < 0) {
     return ret;
   }
 
-  ret = olh.write(header.reshardlog_entries, header.resharding_in_logrecord());
+  ret = olh.write(header);
   if (ret < 0) {
     return ret;
   }
@@ -2289,9 +2288,7 @@ static int rgw_bucket_trim_olh_log(cls_method_context_t hctx, bufferlist *in, bu
   }
 
   /* write the olh data entry */
-  ret = write_entry(hctx, olh_data_entry, olh_data_key,
-                    header.reshardlog_entries,
-                    header.resharding_in_logrecord());
+  ret = write_entry(hctx, olh_data_entry, olh_data_key, header);
   if (ret < 0) {
     CLS_LOG(0, "ERROR: write_entry() olh_key=%s ret=%d", olh_data_key.c_str(), ret);
     return ret;
@@ -2340,15 +2337,11 @@ static int rgw_bucket_clear_olh(cls_method_context_t hctx, bufferlist *in, buffe
     return -ECANCELED;
   }
 
-  ret = cls_cxx_map_remove_key(hctx, olh_data_key);
+  ret = remove_entry(hctx, olh_data_key, olh_data_entry.key, header);
   if (ret < 0) {
     CLS_LOG(1, "NOTICE: %s: can't remove key %s ret=%d", __func__, olh_data_key.c_str(), ret);
     return ret;
   }
-  bufferlist empty;
-  ret = record_duplicate_entry(hctx, olh_data_key, olh_data_entry.key, &empty, header.resharding_in_logrecord());
-  if (ret < 0)
-    return ret;
 
   rgw_bucket_dir_entry plain_entry;
 
@@ -2368,15 +2361,11 @@ static int rgw_bucket_clear_olh(cls_method_context_t hctx, bufferlist *in, buffe
     return 0;
   }
 
-  ret = cls_cxx_map_remove_key(hctx, op.key.name);
+  ret = remove_entry(hctx, op.key.name, plain_entry.key, header);
   if (ret < 0) {
     CLS_LOG(1, "NOTICE: %s: can't remove key %s ret=%d", __func__, op.key.name.c_str(), ret);
     return ret;
   }
-
-  ret = record_duplicate_entry(hctx, op.key.name, plain_entry.key, &empty, header.resharding_in_logrecord());
-  if (ret < 0)
-    return ret;
 
   return 0;
 }
