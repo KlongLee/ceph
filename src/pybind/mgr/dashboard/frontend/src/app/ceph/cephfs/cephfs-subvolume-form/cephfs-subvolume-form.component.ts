@@ -153,6 +153,10 @@ export class CephfsSubvolumeFormComponent extends CdForm implements OnInit {
   }
 
   submit() {
+    if (this.subvolumeForm.invalid) {
+      this.subvolumeForm.markAsDirty();
+      return;
+    }
     const subVolumeName = this.subvolumeForm.getValue('subvolumeName');
     const subVolumeGroupName = this.subvolumeForm.getValue('subvolumeGroupName');
     const pool = this.subvolumeForm.getValue('pool');

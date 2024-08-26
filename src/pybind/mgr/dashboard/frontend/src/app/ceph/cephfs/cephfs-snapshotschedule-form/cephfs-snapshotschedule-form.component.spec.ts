@@ -15,7 +15,13 @@ import { ReactiveFormsModule } from '@angular/forms';
 import { FormHelper, configureTestBed } from '~/testing/unit-test-helper';
 import { CephfsSnapshotScheduleService } from '~/app/shared/api/cephfs-snapshot-schedule.service';
 import { of } from 'rxjs';
-import { ModalService, ModalModule, InputModule, SelectModule, NumberModule } from 'carbon-components-angular';
+import {
+  ModalService,
+  ModalModule,
+  InputModule,
+  SelectModule,
+  NumberModule
+} from 'carbon-components-angular';
 import { NgbTypeaheadModule } from '@ng-bootstrap/ng-bootstrap';
 
 describe('CephfsSnapshotscheduleFormComponent', () => {
