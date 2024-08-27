@@ -61,10 +61,16 @@ is a subset of the same information from the ``ceph fs dump`` command.
 
 ::
 
-    ceph fs set <file system name> <var> <val>
+    ceph fs set <file system name> <var> <val> [--yes-i-really-mean-it]
 
 Change a setting on a file system. These settings are specific to the named
-file system and do not affect other file systems.
+file system and do not affect other file systems. Confirmation flag is only
+needed for changing ``max_mds`` when cluster is unhealthy.
+
+.. note:: Confirmation flag for changing ``max_mds`` FS setting variable when
+   cluster is unhealthy has been added as a precaution to tell user that
+   changing ``max_mds`` during troubleshooting or recovery won't help and
+   might worsen the system state.
 
 ::
 
