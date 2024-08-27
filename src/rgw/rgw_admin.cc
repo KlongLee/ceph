@@ -7395,16 +7395,6 @@ int main(int argc, const char **argv)
 
     formatter->close_section();
     formatter->flush(cout);
-
-    if (remove_deleted) {
-      cout << "INFO: removing bucket entries from omap" << std::endl;
-      ret = remove_deleted_buckets(dpp(), static_cast<rgw::sal::RadosStore*>(driver),
-                                   bucket_entries, null_yield);
-      if (ret < 0) {
-        cerr << "ERROR: remove_deleted_buckets() returned: " << cpp_strerror(-ret) << std::endl;
-        return -ret;
-      }
-    }
   }
 
   if (opt_cmd == OPT::BUCKET_LAYOUT) {
@@ -8806,6 +8796,18 @@ next:
 	return 1;
       }
       RGWBucketAdminOp::remove_bucket(driver, bucket_op, null_yield, dpp(), bypass_gc, false);
+    }
+
+    if (remove_deleted) {
+      // TODO: use the existing string make function
+      std::string bucket_entry = rgw_make_bucket_metadata_string(tenant, bucket_name, bucket_id);
+      cout << "INFO: removing bucket entry from omap" << std::endl;
+      ret = remove_deleted_bucket(dpp(), static_cast<rgw::sal::RadosStore*>(driver),
+                                   bucket_entry, null_yield);
+      if (ret < 0) {
+        cerr << "ERROR: remove_deleted_buckets() returned: " << cpp_strerror(-ret) << std::endl;
+        return -ret;
+      }
     }
   }
 

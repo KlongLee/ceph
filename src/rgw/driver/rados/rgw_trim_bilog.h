@@ -125,7 +125,7 @@ int list_deleted_buckets(const DoutPrefixProvider* dpp,
                         std::set<std::string>& buckets,
                         optional_yield y);
 
-int remove_deleted_buckets(const DoutPrefixProvider *dpp, 
+int remove_deleted_bucket(const DoutPrefixProvider *dpp, 
                           rgw::sal::RadosStore* store,
-                          const std::set<std::string> buckets,
+                          std::string& bucket_key,
                           optional_yield y);

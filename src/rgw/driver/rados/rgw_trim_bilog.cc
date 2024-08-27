@@ -847,7 +847,8 @@ int BucketTrimInstanceCR::operate(const DoutPrefixProvider *dpp)
     }
 
     if (clean_info) {
-      if (clean_info->second.layout.type != rgw::BucketLogType::InIndex) {
+      if (clean_info->second.layout.type != rgw::BucketLogType::InIndex ||
+          clean_info->second.layout.type != rgw::BucketLogType::Deleted) {
 	ldpp_dout(dpp, 0) << "Unable to convert log of unknown type "
 			  << clean_info->second.layout.type
 			  << " to rgw::bucket_index_layout_generation " << dendl;
@@ -1653,9 +1654,9 @@ int list_deleted_buckets(const DoutPrefixProvider* dpp,
   return 0;
 }
 
-int remove_deleted_buckets(const DoutPrefixProvider *dpp, 
+int remove_deleted_bucket(const DoutPrefixProvider *dpp, 
                           rgw::sal::RadosStore* store,
-                          const std::set<std::string> buckets,
+                          std::string& bucket_key,
                           optional_yield y)
 {
   auto& pool = store->svc()->zone->get_zone_params().log_pool;
@@ -1667,12 +1668,10 @@ int remove_deleted_buckets(const DoutPrefixProvider *dpp,
   }
 
   librados::ObjectWriteOperation op;
-  for(const auto& key : buckets) {
-    op.omap_rm_keys(std::set<std::string>({key}));
-    r = rgw_rados_operate(dpp, ref.ioctx, ref.obj.oid, &op, y);
-    if (r == -ENOENT) {
-      return 0;
-    }
+  op.omap_rm_keys(std::set<std::string>({bucket_key}));
+  r = rgw_rados_operate(dpp, ref.ioctx, ref.obj.oid, &op, y);
+  if (r == -ENOENT) {
+    return 0;
   }
   return 0;
 }
