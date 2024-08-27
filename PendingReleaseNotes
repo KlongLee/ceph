@@ -12,6 +12,11 @@
   of the column showing the state of a group snapshot in the unformatted CLI
   output is changed from 'STATUS' to 'STATE'. The state of a group snapshot
   that was shown as 'ok' is now shown as 'complete', which is more descriptive.
+* CephFS: Modifying FS setting variable "max_mds" when a cluster is unhealthy
+  now requires users to pass the confirmation flag (--yes-i-really-mean-it).
+  This has been added as a precaution to tell user that modifying "max_mds"
+  value won't help with troublehshooting or recovery effort and instead might
+  destabilize the cluster further.
 
 >=19.0.0
 
