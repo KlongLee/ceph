@@ -894,9 +894,11 @@ WRITE_CLASS_ENCODER(RGWBucketEntryPoint)
 struct RGWStorageStats
 {
   RGWObjCategory category;
+  rgw_bucket_dir_stats stats;
   uint64_t size;
   uint64_t size_rounded;
   uint64_t num_objects;
+  std::string storage_class;
   uint64_t size_utilized{0}; //< size after compression, encryption
   bool dump_utilized;        // whether dump should include utilized values
 
@@ -1131,6 +1133,7 @@ void dump(struct req_state*);
 
 /** Store basic data on bucket */
 struct RGWBucketEnt {
+  rgw_bucket_dir_stats stats;
   rgw_bucket bucket;
   size_t size;
   size_t size_rounded;
@@ -1161,6 +1164,7 @@ struct RGWBucketEnt {
 
   void convert(cls_user_bucket_entry *b) const {
     bucket.convert(&b->bucket);
+    b->stats = stats; 
     b->size = size;
     b->size_rounded = size_rounded;
     b->creation_time = creation_time;
@@ -1177,6 +1181,7 @@ struct RGWBucketEnt {
     encode(mt, bl);
     encode(count, bl);
     encode(bucket, bl);
+    encode(stats, bl);
     s = size_rounded;
     encode(s, bl);
     encode(creation_time, bl);
@@ -1190,6 +1195,7 @@ struct RGWBucketEnt {
     std::string empty_str;  // backward compatibility
     decode(empty_str, bl);
     decode(s, bl);
+    decode(stats, bl);
     decode(mt, bl);
     size = s;
     if (struct_v < 6) {
