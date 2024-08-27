@@ -121,10 +121,51 @@ struct laddr_formatter_t<T> {
     return out << 'L' << std::hex << v << std::dec;
   }
 };
+struct random_generator_t {
+  static random_generator_t &get() {
+    static thread_local random_generator_t r{};
+    return r;
+  }
+  random_generator_t()
+      : eng(std::rand()),
+	// [0, (1ULL << 47) - 1]
+	global(0, static_cast<uint64_t>(
+		 L_ADDR_MAX.get_object_content())) {}
+  std::default_random_engine eng;
+  std::uniform_int_distribution<uint64_t> global;
+  uint64_t operator()() { return global(eng); }
+};
+uint64_t rand() {
+  return random_generator_t::get()();
+}
 } // namespace details
 
 std::ostream &operator<<(std::ostream &out, const laddr_t &laddr) {
   return details::laddr_formatter_t<laddr_t::Unsigned>::format(out, laddr.value);
+}
+
+std::ostream &operator<<(std::ostream &out, const laddr_printer_t &p) {
+  out << p.laddr;
+  if (p.laddr.is_global_data()) {
+    return out << "(global_data_offset=0x" << std::hex
+	       << static_cast<uint64_t>(p.laddr.get_object_content())
+	       << std::dec << ")";
+  }
+  out << "(pool={}" << p.laddr.get_pool()
+      << ", shard={}" << p.laddr.get_shard()
+      << ", reversed_hash={}" << p.laddr.get_reversed_hash()
+      << ", local_object_id={}" << p.laddr.get_local_object_id()
+      << ", is_metadata={}", p.laddr.is_metadata();
+  if (p.laddr.is_metadata() || p.offset_bits == OFFSET_BITS_NULL) {
+    return out << ", offset=0x" << std::hex
+	       << static_cast<uint64_t>(p.laddr.get_object_content())
+	       << std::dec << ")";
+  } else {
+    return out << ", offset_bits=" << p.offset_bits
+	       << ", local_clone_id=" << p.laddr.get_local_clone_id(p.offset_bits)
+	       << ", onode_offset=" << p.laddr.get_data_offset(p.offset_bits)
+	       << ")";
+  }
 }
 
 std::ostream &operator<<(std::ostream &out, const laddr_offset_t &laddr_offset) {
@@ -132,13 +173,169 @@ std::ostream &operator<<(std::ostream &out, const laddr_offset_t &laddr_offset) 
 	     << "+" << std::hex << laddr_offset.get_offset() << std::dec;
 }
 
+std::ostream &operator<<(std::ostream &out, const laddr_hint_t &hint) {
+  out << "laddr_hint_t(hint=" << laddr_printer_t(hint.addr, hint.offset_bits)
+      << ", collision_level=";
+  switch(hint.level) {
+  case laddr_hint_t::collision_level_t::local_object_id:
+    out << "local_object_id";
+    break;
+  case laddr_hint_t::collision_level_t::object_content:
+    out << "object_content";
+    break;
+  case laddr_hint_t::collision_level_t::never:
+    out << "nenver";
+    break;
+  }
+  out << ", collision_policy=";
+  switch(hint.policy) {
+  case laddr_hint_t::collision_policy_t::gen_random:
+    out << "gen_random";
+    break;
+  case laddr_hint_t::collision_policy_t::linear_search:
+    out << "linear_search";
+    break;
+  }
+  if (hint.offset_bits != OFFSET_BITS_NULL) {
+    out << ", offset_bits=" << hint.offset_bits;
+  }
+  return out << ")";
+}
+
+laddr_hint_t gen_global_hint() {
+  return {
+    // details::rand() only uses 47 bits while the object contents
+    // has 48 bits, which allow global hint use linear search policy.
+    L_ADDR_MIN.with_object_data(details::rand()),
+    OFFSET_BITS_NULL,
+    laddr_hint_t::collision_level_t::object_content,
+    laddr_hint_t::collision_policy_t::linear_search
+  };
+}
+
+laddr_hint_t gen_object_data_hint(
+  pool_t pool,
+  shard_t shard,
+  crush_hash_t crush,
+  std::optional<local_object_id_t> id,
+  int offset_bits) {
+  assert(offset_bits != OFFSET_BITS_NULL);
+  auto addr = L_ADDR_MIN;
+  auto level = laddr_hint_t::collision_level_t::local_object_id;
+  auto policy = laddr_hint_t::collision_policy_t::gen_random;
+  addr.set_pool(pool);
+  addr.set_shard(shard);
+  addr.set_reversed_hash(crush);
+  if (id) {
+    addr.set_local_object_id(*id);
+    level = laddr_hint_t::collision_level_t::object_content;
+  } else {
+    addr.set_local_object_id(details::rand());
+  }
+  auto lc_id = details::rand();
+  addr.set_local_clone_id(lc_id, offset_bits);
+  while (BOOST_UNLIKELY(!addr.is_object_data())) {
+    addr.set_local_clone_id(++lc_id, offset_bits);
+  }
+  assert(addr.is_object_data());
+  assert(addr.match_pool_bits(pool));
+  assert(addr.get_shard() == shard);
+  assert(addr.get_reversed_hash() == crush);
+  if (id) {
+    assert(*id == addr.get_local_object_id());
+  }
+  assert(!addr.is_metadata());
+  assert(addr.get_data_offset(offset_bits) == 0);
+  return {addr, offset_bits, level, policy};
+}
+
+laddr_hint_t gen_object_md_hint(
+  pool_t pool,
+  shard_t shard,
+  crush_hash_t crush,
+  std::optional<local_object_id_t> id) {
+  auto addr = L_ADDR_MIN;
+  auto level = laddr_hint_t::collision_level_t::local_object_id;
+  auto policy = laddr_hint_t::collision_policy_t::linear_search;
+  addr.set_pool(pool);
+  addr.set_shard(shard);
+  addr.set_reversed_hash(crush);
+  if (id) {
+    addr.set_local_object_id(*id);
+    level = laddr_hint_t::collision_level_t::object_content;
+  } else {
+    addr.set_local_object_id(details::rand());
+  }
+  addr.set_metadata(true);
+  addr.set_object_data(details::rand());
+  assert(addr.is_object_data());
+  assert(addr.match_pool_bits(pool));
+  assert(addr.get_shard() == shard);
+  assert(addr.get_reversed_hash() == crush);
+  if (id) {
+    assert(*id == addr.get_local_object_id());
+  }
+  assert(addr.is_metadata());
+  return {addr, OFFSET_BITS_NULL, level, policy};
+}
+
+laddr_hint_t gen_next_hint(laddr_hint_t hint) {
+  ceph_assert(hint.collide_on_object_content() ||
+	      hint.gen_random_on_collision());
+  auto addr = hint.addr;
+  auto set_new_object_content = [&] {
+    do {
+      addr.set_object_data(details::rand());
+    } while (addr.get_object_content() ==
+	     hint.addr.get_object_content());
+  };
+
+  if (addr.is_global_data()) {
+    // for global metadata
+    assert(hint.collide_on_object_content());
+    set_new_object_content();
+    assert(addr.get_prefix() == hint.addr.get_prefix());
+  } else if (hint.collide_on_local_object_id()) {
+    // object hint(data and md), regenerate a new local object id
+    assert(addr.is_object_data());
+    do {
+      addr.set_local_object_id(details::rand());
+    } while (addr.get_local_object_id() ==
+	     hint.addr.get_local_object_id());
+    assert(addr.is_metadata() == hint.addr.is_metadata());
+    assert(addr.get_object_content() == hint.addr.get_object_content());
+  } else if (hint.offset_bits == OFFSET_BITS_NULL) {
+    // object md hint
+    assert(addr.is_metadata());
+    set_new_object_content();
+  } else {
+    // object data hint
+    assert(!addr.is_metadata());
+    assert(hint.offset_bits != OFFSET_BITS_NULL);
+    do {
+      addr.set_local_clone_id(details::rand(), hint.offset_bits);
+    } while (addr.get_local_clone_id(hint.offset_bits) ==
+	     hint.addr.get_local_clone_id(hint.offset_bits));
+  }
+
+  assert(addr.get_pool() == hint.addr.get_pool());
+  assert(addr.get_shard() == hint.addr.get_shard());
+  assert(addr.get_reversed_hash() == hint.addr.get_reversed_hash());
+  hint.addr = addr;
+  return hint;
+}
+
 std::ostream &operator<<(std::ostream &out, const pladdr_t &pladdr)
 {
+  out << "pladdr(";
   if (pladdr.is_laddr()) {
-    return out << pladdr.get_laddr();
+    // pladdr(local_clone_id=...)
+    out << "local_clone_id=" << pladdr.get_local_clone_id();
   } else {
-    return out << pladdr.get_paddr();
+    // pladdr(paddr<...>)
+    out << pladdr.get_paddr();
   }
+  return out << ")";
 }
 
 std::ostream &operator<<(std::ostream &out, const paddr_t &rhs)

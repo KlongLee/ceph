@@ -1771,7 +1771,7 @@ TEST_P(tm_random_block_device_test_t, scatter_allocation)
     laddr_t ADDR = laddr_t::from_byte_offset(0xFF * 4096);
     epm->prefill_fragmented_devices();
     auto t = create_transaction();
-    for (int i = 0; i < 1958; i++) {
+    for (int i = 0; i < 1975; i++) {
       auto extents = alloc_extents(t, (ADDR + i * 16384).checked_to_laddr(), 16384, 'a');
     }
     alloc_extents_deemed_fail(t, (ADDR + 1991 * 16384).checked_to_laddr(), 16384, 'a');

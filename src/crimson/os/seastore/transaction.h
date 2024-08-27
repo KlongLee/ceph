@@ -388,7 +388,10 @@ public:
       handle(std::move(handle)),
       on_destruct(std::move(f)),
       src(src),
-      trans_id(trans_id)
+      trans_id(trans_id),
+      // TODO: support init offset_bits from OSD/pool/onode config,
+      // currently use static default config
+      offset_bits(laddr_t::DEFAULT_OFFSET_BITS)
   {}
 
   void invalidate_clear_write_set() {
@@ -525,6 +528,10 @@ public:
     return trans_id;
   }
 
+  int get_offset_bits() const {
+    return offset_bits;
+  }
+
   using view_ref = std::unique_ptr<trans_spec_view_t>;
   template <typename T, typename... Args,
 	   std::enable_if_t<std::is_base_of_v<trans_spec_view_t, T>, int> = 0>
@@ -630,6 +637,8 @@ private:
   const src_t src;
 
   transaction_id_t trans_id = TRANS_ID_NULL;
+
+  const int offset_bits;
 };
 using TransactionRef = Transaction::Ref;
 

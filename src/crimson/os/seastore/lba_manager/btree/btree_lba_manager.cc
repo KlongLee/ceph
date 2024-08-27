@@ -178,13 +178,16 @@ BtreeLBAManager::_get_original_mappings(
 	TRACET(
 	  "getting original mapping for indirect mapping {}~{}",
 	  c.trans, pin->get_key(), pin->get_length());
+	auto key = pin->get_key();
+	auto offset_bits = c.trans.get_offset_bits();
+	auto intermediate_key = pin->get_raw_val()
+	    .build_laddr(key, offset_bits);
 	return this->get_mappings(
-	  c.trans, pin->get_raw_val().get_laddr(), pin->get_length()
-	).si_then([&pin, &ret, c](auto new_pin_list) {
+	  c.trans, intermediate_key, pin->get_length()
+	).si_then([&pin, &ret, c, intermediate_key](auto new_pin_list) {
 	  LOG_PREFIX(BtreeLBAManager::get_mappings);
 	  assert(new_pin_list.size() == 1);
 	  auto &new_pin = new_pin_list.front();
-	  auto intermediate_key = pin->get_raw_val().get_laddr();
 	  assert(!new_pin->is_indirect());
 	  assert(new_pin->get_key() <= intermediate_key);
 	  assert(new_pin->get_key() + new_pin->get_length() >=
@@ -195,12 +198,12 @@ BtreeLBAManager::_get_original_mappings(
 	    c.trans,
 	    new_pin->get_key(), new_pin->get_length(),
 	    pin->get_key(), pin->get_length(),
-	    pin->get_raw_val().get_laddr());
+	    intermediate_key);
 	  auto &btree_new_pin = static_cast<BtreeLBAMapping&>(*new_pin);
 	  btree_new_pin.make_indirect(
 	    pin->get_key(),
 	    pin->get_length(),
-	    pin->get_raw_val().get_laddr());
+	    intermediate_key);
 	  ret.emplace_back(std::move(new_pin));
 	  return seastar::now();
 	}).handle_error_interruptible(
@@ -283,8 +286,11 @@ BtreeLBAManager::_get_mapping(
 	  return seastar::do_with(
 	    std::move(pin),
 	    [this, c](auto &pin) {
-	    return _get_mapping(
-	      c.trans, pin->get_raw_val().get_laddr()
+	    auto key = pin->get_key();
+	    auto offset_bits = c.trans.get_offset_bits();
+	    auto intermediate_key = pin->get_raw_val()
+		.build_laddr(key, offset_bits);
+	    return _get_mapping(c.trans, intermediate_key
 	    ).si_then([&pin](auto new_pin) {
 	      ceph_assert(pin->get_length() == new_pin->get_length());
 	      new_pin->make_indirect(
@@ -753,7 +759,8 @@ BtreeLBAManager::update_refcount(
     if (!map_value.refcount && map_value.pladdr.is_laddr() && cascade_remove) {
       fut = _decref_intermediate(
 	t,
-	map_value.pladdr.get_laddr(),
+	map_value.pladdr.build_laddr(
+	  addr, t.get_offset_bits()),
 	map_value.len
       );
     }

@@ -106,14 +106,14 @@ using LBAInternalNodeRef = LBAInternalNode::Ref;
  *   checksum   :                            4b
  *   size       : uint32_t[1]                4b
  *   meta       : lba_node_meta_le_t[3]      (1*40)b
- *   keys       : laddr_t[89]                (89*16)b
- *   values     : lba_map_val_t[89]          (89*29)b
- *                                           = 4053
+ *   keys       : laddr_t[109]               (109*16)b
+ *   values     : lba_map_val_t[109]         (109*21)b
+ *                                           = 4081
  *
  * TODO: update FixedKVNodeLayout to handle the above calculation
  * TODO: the above alignment probably isn't portable without further work
  */
-constexpr size_t LEAF_NODE_CAPACITY = 89;
+constexpr size_t LEAF_NODE_CAPACITY = 109;
 
 /**
  * lba_map_val_le_t
