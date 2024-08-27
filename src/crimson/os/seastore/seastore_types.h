@@ -19,6 +19,12 @@
 #include "include/interval_set.h"
 #include "include/uuid.h"
 
+#define SEASTORE_LADDR_USE_BOOST_U128 0
+
+#if !defined (__SIZEOF_INT128__) || SEASTORE_LADDR_USE_BOOST_U128
+#include <boost/multiprecision/cpp_int.hpp>
+#endif
+
 namespace crimson::os::seastore {
 
 /* using a special xattr key "omap_header" to store omap header */
@@ -1023,7 +1029,12 @@ inline extent_len_le_t init_extent_len_le(extent_len_t len) {
 class laddr_t {
 public:
   // the type of underlying integer
-  using Unsigned = uint64_t;
+#if defined (__SIZEOF_INT128__) && !SEASTORE_LADDR_USE_BOOST_U128
+  using Unsigned = unsigned __int128;
+#else
+  using Unsigned = boost::multiprecision::uint128_t;
+#endif
+
   static constexpr Unsigned RAW_VALUE_MAX =
       std::numeric_limits<Unsigned>::max();
 
@@ -1045,14 +1056,38 @@ public:
 
   /// laddr_t works like primitive integer type, encode/decode it manually
   void encode(::ceph::buffer::list::contiguous_appender& p) const {
+#if defined (__SIZEOF_INT128__) && !SEASTORE_LADDR_USE_BOOST_U128
     p.append(reinterpret_cast<const char *>(&value), sizeof(Unsigned));
+#else
+    ceph_le64 high = get_high64();
+    ceph_le64 low = get_low64();
+    p.append(reinterpret_cast<const char *>(&low), sizeof(uint64_t));
+    p.append(reinterpret_cast<const char *>(&high), sizeof(uint64_t));
+#endif
   }
   void bound_encode(size_t& p) const {
+#if defined (__SIZEOF_INT128__) && !SEASTORE_LADDR_USE_BOOST_U128
+    static_assert(sizeof(Unsigned) == sizeof(uint64_t) * 2,
+		  "the size of laddr_t Unsigned is not 16 bytes");
     p += sizeof(Unsigned);
+#else
+    p += sizeof(uint64_t) * 2;
+#endif
   }
   void decode(::ceph::buffer::ptr::const_iterator& p) {
+#if defined (__SIZEOF_INT128__) && !SEASTORE_LADDR_USE_BOOST_U128
     assert(static_cast<std::size_t>(p.get_end() - p.get_pos()) >= sizeof(Unsigned));
     memcpy((char *)&value, p.get_pos_add(sizeof(Unsigned)), sizeof(Unsigned));
+#else
+    assert(static_cast<std::size_t>(p.get_end() - p.get_pos()) >= sizeof(uint64_t) * 2);
+    ceph_le64 high = 0;
+    ceph_le64 low = 0;
+    memcpy((char *)&low, p.get_pos_add(sizeof(uint64_t)), sizeof(uint64_t));
+    memcpy((char *)&high, p.get_pos_add(sizeof(uint64_t)), sizeof(uint64_t));
+    value = (uint64_t)high;
+    value <<= 64;
+    value |= (uint64_t)low;
+#endif
   }
 
   // laddr_offset_t contains one base laddr and one block not aligned
@@ -1180,7 +1215,18 @@ public:
     return laddr_offset.get_aligned_laddr() == laddr
 	&& laddr_offset.get_offset() == 0;
   }
-  friend auto operator<=>(const laddr_t&, const laddr_t&) = default;
+  friend constexpr std::strong_ordering operator<=>(
+    const laddr_t& l, const laddr_t& r) {
+    // boost uint128_t doesn't support three ways operator,
+    // so we should implement it manually.
+    if (l.value < r.value) {
+      return std::strong_ordering::less;
+    } else if (l.value == r.value) {
+      return std::strong_ordering::equivalent;
+    } else {
+      return std::strong_ordering::greater;
+    }
+  }
   friend auto operator<=>(const laddr_t &laddr,
 			  const laddr_offset_t &laddr_offset) {
     return laddr_offset_t(laddr, 0) <=> laddr_offset;
@@ -1218,6 +1264,12 @@ private:
   // Prevent direct construction of laddr_t with an integer,
   // always use laddr_t::from_raw_uint instead.
   constexpr explicit laddr_t(Unsigned value) : value(value) {}
+  constexpr laddr_t(uint64_t low, uint64_t high)
+      : value((Unsigned(high) << 64) | Unsigned(low)) {}
+
+  uint64_t get_high64() const { return static_cast<uint64_t>(value >> 64); }
+  uint64_t get_low64() const { return static_cast<uint64_t>(value); }
+
   Unsigned value;
 };
 using laddr_offset_t = laddr_t::laddr_offset_t;
@@ -1229,38 +1281,36 @@ constexpr laddr_t L_ADDR_ROOT = laddr_t::from_raw_uint(laddr_t::RAW_VALUE_MAX - 
 constexpr laddr_t L_ADDR_LBAT = laddr_t::from_raw_uint(laddr_t::RAW_VALUE_MAX - 2);
 
 struct __attribute__((packed)) laddr_le_t {
-  ceph_le64 laddr;
+  ceph_le64 low64;
+  ceph_le64 high64;
 
   using orig_type = laddr_t;
 
   laddr_le_t() : laddr_le_t(L_ADDR_NULL) {}
   laddr_le_t(const laddr_le_t &) = default;
   explicit laddr_le_t(const laddr_t &addr)
-    : laddr(addr.value) {}
+    : low64(addr.get_low64()), high64(addr.get_high64()) {}
 
   operator laddr_t() const {
-    return laddr_t(laddr);
+    return laddr_t(low64, high64);
   }
   laddr_le_t& operator=(laddr_t addr) {
-    ceph_le64 val;
-    val = addr.value;
-    laddr = val;
+    low64 = addr.get_low64();
+    high64 = addr.get_high64();
     return *this;
   }
 
   bool operator==(const laddr_le_t&) const = default;
 };
 
-constexpr uint64_t PL_ADDR_NULL = std::numeric_limits<uint64_t>::max();
-
 struct pladdr_t {
   std::variant<laddr_t, paddr_t> pladdr;
 
   pladdr_t() = default;
-  pladdr_t(const pladdr_t &) = default;
+  pladdr_t(const pladdr_t &) noexcept = default;
   pladdr_t(laddr_t laddr)
     : pladdr(laddr) {}
-  pladdr_t(paddr_t paddr)
+  constexpr pladdr_t(paddr_t paddr)
     : pladdr(paddr) {}
 
   bool is_laddr() const {
@@ -1295,6 +1345,8 @@ struct pladdr_t {
 
 };
 
+constexpr pladdr_t PL_ADDR_NULL = pladdr_t(P_ADDR_NULL);
+
 std::ostream &operator<<(std::ostream &out, const pladdr_t &pladdr);
 
 enum class addr_type_t : uint8_t {
@@ -1304,29 +1356,34 @@ enum class addr_type_t : uint8_t {
 };
 
 struct __attribute__((packed)) pladdr_le_t {
-  ceph_le64 pladdr = ceph_le64(PL_ADDR_NULL);
-  addr_type_t addr_type = addr_type_t::MAX;
+  ceph_le64 low64;
+  ceph_le64 high64;
+  addr_type_t addr_type;
 
-  pladdr_le_t() = default;
+  pladdr_le_t() : pladdr_le_t(PL_ADDR_NULL) {}
   pladdr_le_t(const pladdr_le_t &) = default;
+  explicit pladdr_le_t(const laddr_t &laddr)
+      : low64(laddr.get_low64()),
+	high64(laddr.get_high64()),
+	addr_type(addr_type_t::LADDR) {}
+  explicit pladdr_le_t(const paddr_t &paddr)
+      : low64(paddr.internal_paddr),
+	high64(std::numeric_limits<uint64_t>::max()),
+	addr_type(addr_type_t::PADDR) {}
   explicit pladdr_le_t(const pladdr_t &addr)
-    : pladdr(
-	ceph_le64(
-	  addr.is_laddr() ?
-	    std::get<0>(addr.pladdr).value :
-	    std::get<1>(addr.pladdr).internal_paddr)),
-      addr_type(
-	addr.is_laddr() ?
-	  addr_type_t::LADDR :
-	  addr_type_t::PADDR)
+      : pladdr_le_t(
+	addr.is_laddr()
+	  ? pladdr_le_t(addr.get_laddr())
+	  : pladdr_le_t(addr.get_paddr()))
   {}
 
   operator pladdr_t() const {
     if (addr_type == addr_type_t::LADDR) {
-      return pladdr_t(laddr_t(pladdr));
+      return pladdr_t(laddr_t(low64, high64));
     } else {
       assert(addr_type == addr_type_t::PADDR);
-      return pladdr_t(paddr_t(pladdr));
+      assert((uint64_t)high64 == std::numeric_limits<uint64_t>::max());
+      return pladdr_t(paddr_t(low64));
     }
   }
 };
