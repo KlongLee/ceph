@@ -66,6 +66,8 @@ class Config:
     smb_port: int
     ceph_config_entity: str
     vhostname: str
+    metrics_image: str
+    metrics_port: int
     # clustering related values
     rank: int
     rank_generation: int
@@ -88,6 +90,8 @@ class Config:
         smb_port: int = 0,
         ceph_config_entity: str = 'client.admin',
         vhostname: str = '',
+        metrics_image: str = '',
+        metrics_port: int = 0,
         rank: int = -1,
         rank_generation: int = -1,
         cluster_meta_uri: str = '',
@@ -106,6 +110,8 @@ class Config:
         self.smb_port = smb_port
         self.ceph_config_entity = ceph_config_entity
         self.vhostname = vhostname
+        self.metrics_image = metrics_image
+        self.metrics_port = metrics_port
         self.rank = rank
         self.rank_generation = rank_generation
         self.cluster_meta_uri = cluster_meta_uri
@@ -138,15 +144,34 @@ def _container_dns_args(cfg: Config) -> List[str]:
     return cargs
 
 
-class SambaContainerCommon:
-    def __init__(
-        self,
-        cfg: Config,
-    ) -> None:
+class ContainerCommon:
+    def __init__(self, cfg: Config, image: str = '') -> None:
         self.cfg = cfg
+        self.image = image
 
     def name(self) -> str:
-        raise NotImplementedError('samba container name')
+        raise NotImplementedError('container name')
+
+    def envs(self) -> Dict[str, str]:
+        return {}
+
+    def envs_list(self) -> List[str]:
+        return []
+
+    def args(self) -> List[str]:
+        return []
+
+    def container_args(self) -> List[str]:
+        return []
+
+    def container_image(self) -> str:
+        return self.image
+
+
+class SambaContainerCommon(ContainerCommon):
+    def __init__(self, cfg: Config, image: str = '') -> None:
+        self.cfg = cfg
+        self.image = image
 
     def envs(self) -> Dict[str, str]:
         environ = {
@@ -178,9 +203,6 @@ class SambaContainerCommon:
         if self.cfg.debug_delay:
             args.append(f'--debug-delay={self.cfg.debug_delay}')
         return args
-
-    def container_args(self) -> List[str]:
-        return []
 
 
 class SambaNetworkedInitContainer(SambaContainerCommon):
@@ -216,6 +238,9 @@ class SMBDContainer(SambaContainerCommon):
         cargs = []
         if self.cfg.smb_port:
             cargs.append(f'--publish={self.cfg.smb_port}:{self.cfg.smb_port}')
+        if self.cfg.metrics_port:
+            metrics_port = self.cfg.metrics_port
+            cargs.append(f'--publish={metrics_port}:{metrics_port}')
         cargs.extend(_container_dns_args(self.cfg))
         return cargs
 
@@ -265,6 +290,17 @@ class ConfigWatchContainer(SambaContainerCommon):
 
     def args(self) -> List[str]:
         return super().args() + ['update-config', '--watch']
+
+
+class SMBMetricsContainer(ContainerCommon):
+    def name(self) -> str:
+        return 'smbmetrics'
+
+    def args(self) -> List[str]:
+        args = []
+        if self.cfg.metrics_port > 0:
+            args.append(f'--port={self.cfg.metrics_port}')
+        return args
 
 
 class CTDBMigrateInitContainer(SambaContainerCommon):
@@ -341,13 +377,13 @@ class CTDBNodeMonitorContainer(SambaContainerCommon):
 class ContainerLayout:
     init_containers: List[SambaContainerCommon]
     primary: SambaContainerCommon
-    supplemental: List[SambaContainerCommon]
+    supplemental: List[ContainerCommon]
 
     def __init__(
         self,
         init_containers: List[SambaContainerCommon],
         primary: SambaContainerCommon,
-        supplemental: List[SambaContainerCommon],
+        supplemental: List[ContainerCommon],
     ) -> None:
         self.init_containers = init_containers
         self.primary = primary
@@ -376,6 +412,7 @@ class SMB(ContainerDaemonForm):
         self._cached_layout: Optional[ContainerLayout] = None
         self._rank_info = context_getters.fetch_rank_info(ctx)
         self.smb_port = 445
+        self.metrics_port = 9922
         logger.debug('Created SMB ContainerDaemonForm instance')
 
     @staticmethod
@@ -413,6 +450,8 @@ class SMB(ContainerDaemonForm):
         files = data_utils.dict_get(configs, 'files', {})
         ceph_config_entity = configs.get('config_auth_entity', '')
         vhostname = configs.get('virtual_hostname', '')
+        metrics_image = configs.get('metrics_image', '')
+        metrics_port = int(configs.get('metrics_port', '0'))
         cluster_meta_uri = configs.get('cluster_meta_uri', '')
         cluster_lock_uri = configs.get('cluster_lock_uri', '')
 
@@ -445,6 +484,8 @@ class SMB(ContainerDaemonForm):
             smb_port=self.smb_port,
             ceph_config_entity=ceph_config_entity,
             vhostname=vhostname,
+            metrics_image=metrics_image,
+            metrics_port=metrics_port,
             cluster_meta_uri=cluster_meta_uri,
             cluster_lock_uri=cluster_lock_uri,
         )
@@ -491,7 +532,7 @@ class SMB(ContainerDaemonForm):
         if self._cached_layout:
             return self._cached_layout
         init_ctrs: List[SambaContainerCommon] = []
-        ctrs: List[SambaContainerCommon] = []
+        ctrs: List[ContainerCommon] = []
 
         init_ctrs.append(ConfigInitContainer(self._cfg))
         ctrs.append(ConfigWatchContainer(self._cfg))
@@ -499,6 +540,11 @@ class SMB(ContainerDaemonForm):
         if self._cfg.domain_member:
             init_ctrs.append(MustJoinContainer(self._cfg))
             ctrs.append(WinbindContainer(self._cfg))
+
+        metrics_image = self._cfg.metrics_image.strip()
+        metrics_port = self._cfg.metrics_port
+        if metrics_image and metrics_port > 0:
+            ctrs.append(SMBMetricsContainer(self._cfg, metrics_image))
 
         if self._cfg.clustered:
             init_ctrs += [
@@ -538,7 +584,7 @@ class SMB(ContainerDaemonForm):
         )
 
     def _to_sidecar_container(
-        self, ctx: CephadmContext, smb_ctr: SambaContainerCommon
+        self, ctx: CephadmContext, smb_ctr: ContainerCommon
     ) -> SidecarContainer:
         volume_mounts: Dict[str, str] = {}
         container_args: List[str] = smb_ctr.container_args()
@@ -561,10 +607,11 @@ class SMB(ContainerDaemonForm):
         identity = DaemonSubIdentity.from_parent(
             self.identity, smb_ctr.name()
         )
+        img = smb_ctr.container_image() or ctx.image or self.default_image
         return SidecarContainer(
             ctx,
             entrypoint='',
-            image=ctx.image or self.default_image,
+            image=img,
             identity=identity,
             container_args=container_args,
             args=smb_ctr.args(),
@@ -647,6 +694,9 @@ class SMB(ContainerDaemonForm):
     ) -> None:
         if not any(ep.port == self.smb_port for ep in endpoints):
             endpoints.append(EndPoint('0.0.0.0', self.smb_port))
+        if self.metrics_port > 0:
+            if not any(ep.port == self.metrics_port for ep in endpoints):
+                endpoints.append(EndPoint('0.0.0.0', self.metrics_port))
 
     def prepare_data_dir(self, data_dir: str, uid: int, gid: int) -> None:
         self.validate()
