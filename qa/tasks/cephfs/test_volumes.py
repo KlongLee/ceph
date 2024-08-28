@@ -2367,6 +2367,49 @@ class TestSubvolumes(TestVolumesHelper):
 
         # verify trash dir is clean.
         self._wait_for_trash_empty()
+    
+    def test_subvolume_create_with_earmark(self):
+        # create subvolume with earmark
+        subvolume = self._gen_subvol_name()
+        earmark = "nfs.test"
+        self._fs_cmd("subvolume", "create", self.volname, subvolume, "--earmark", earmark)
+
+        # make sure it exists
+        subvolpath = self._get_subvolume_path(self.volname, subvolume)
+        self.assertNotEqual(subvolpath, None)
+
+        # verify the earmark
+        get_earmark = self._fs_cmd("subvolume", "earmark", "get", self.volname, subvolume)
+        self.assertEqual(get_earmark, earmark)
+    
+    def test_subvolume_set_and_get_earmark(self):
+        # create subvolume
+        subvolume = self._gen_subvol_name()
+        self._fs_cmd("subvolume", "create", self.volname, subvolume)
+
+        # set earmark
+        earmark = "smb.test"
+        self._fs_cmd("subvolume", "earmark", "set", self.volname, subvolume, earmark)
+
+        # get earmark
+        get_earmark = self._fs_cmd("subvolume", "earmark", "get", self.volname, subvolume)
+        self.assertEqual(get_earmark, earmark)
+    
+    def test_subvolume_clear_earmark(self):
+        # create subvolume
+        subvolume = self._gen_subvol_name()
+        self._fs_cmd("subvolume", "create", self.volname, subvolume)
+
+        # set earmark
+        earmark = "smb.test"
+        self._fs_cmd("subvolume", "earmark", "set", self.volname, subvolume, earmark)
+
+        # remove earmark
+        self._fs_cmd("subvolume", "earmark", "rm", self.volname, subvolume)
+
+        # get earmark
+        get_earmark = self._fs_cmd("subvolume", "earmark", "get", self.volname, subvolume)
+        self.assertEqual(get_earmark, "")
 
     def test_subvolume_expand(self):
         """
@@ -2440,6 +2483,12 @@ class TestSubvolumes(TestVolumesHelper):
         for feature in ['snapshot-clone', 'snapshot-autoprotect', 'snapshot-retention']:
             self.assertIn(feature, subvol_info["features"], msg="expected feature '{0}' in subvolume".format(feature))
 
+        # set earmark
+        earmark = "smb.test"
+        self._fs_cmd("subvolume", "earmark", "set", self.volname, subvolume, earmark)
+
+        self.assertEqual(subvol_info["earmark"], earmark)
+        
         # remove subvolumes
         self._fs_cmd("subvolume", "rm", self.volname, subvolume)
 
