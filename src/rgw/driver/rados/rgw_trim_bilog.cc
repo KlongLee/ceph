@@ -847,8 +847,7 @@ int BucketTrimInstanceCR::operate(const DoutPrefixProvider *dpp)
     }
 
     if (clean_info) {
-      if (clean_info->second.layout.type != rgw::BucketLogType::InIndex ||
-          clean_info->second.layout.type != rgw::BucketLogType::Deleted) {
+      if (clean_info->second.layout.type != rgw::BucketLogType::InIndex) {
 	ldpp_dout(dpp, 0) << "Unable to convert log of unknown type "
 			  << clean_info->second.layout.type
 			  << " to rgw::bucket_index_layout_generation " << dendl;

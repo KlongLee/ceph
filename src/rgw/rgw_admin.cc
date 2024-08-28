@@ -8799,7 +8799,7 @@ next:
     }
 
     if (remove_deleted) {
-      // TODO: use the existing string make function
+      // allows removal of bucket entry from 'deleted_buckets' omap object.
       std::string bucket_entry = rgw_make_bucket_metadata_string(tenant, bucket_name, bucket_id);
       cout << "INFO: removing bucket entry from omap" << std::endl;
       ret = remove_deleted_bucket(dpp(), static_cast<rgw::sal::RadosStore*>(driver),

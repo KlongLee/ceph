@@ -85,8 +85,9 @@ int rgw_bucket_parse_bucket_key(CephContext *cct, const string& key,
 
 /* return bucket string in the metadata section format*/
 std::string rgw_make_bucket_metadata_string(const std::string& tenant_name,
-                                       const std::string& bucket_name,
-                                       const std::string& bucket_instance) {
+                                            const std::string& bucket_name,
+                                            const std::string& bucket_instance)
+{
   std::string bucket_entry;
 
   if (bucket_name.empty()) {
