@@ -48,7 +48,7 @@ CLS_NAME(rgw)
 // of a special bucket-index entry for the first byte. Note: although
 // it has no impact, the 2nd, 3rd, or 4th byte of a UTF-8 character
 // may be 0x80.
-#define BI_PREFIX_CHAR 0x80
+constexpr char BI_PREFIX_CHAR = 0x80;
 
 #define BI_BUCKET_OBJS_INDEX          0
 #define BI_BUCKET_LOG_INDEX           1
@@ -80,7 +80,7 @@ static const std::string BI_PREFIX_END = string(1, BI_PREFIX_CHAR) +
  * using appropriately.
  */
 static bool bi_is_plain_entry(const std::string& s) {
-  return (s.empty() || (unsigned char)s[0] != BI_PREFIX_CHAR);
+  return (s.empty() || s[0] != BI_PREFIX_CHAR);
 }
 
 static int bi_entry_type(const string& s)
@@ -209,7 +209,7 @@ static int get_obj_vals(cls_method_context_t hctx,
   }
 
   auto last_element = pkeys->crbegin();
-  if ((unsigned char)last_element->first[0] < BI_PREFIX_CHAR) {
+  if (last_element->first[0] < BI_PREFIX_CHAR) {
     /* if the first character of the last entry is less than the
      * prefix then all entries must preceed the "ugly namespace" and
      * we're done
@@ -218,7 +218,7 @@ static int get_obj_vals(cls_method_context_t hctx,
   }
 
   auto first_element = pkeys->cbegin();
-  if ((unsigned char)first_element->first[0] > BI_PREFIX_CHAR) {
+  if (first_element->first[0] > BI_PREFIX_CHAR) {
     /* if the first character of the first entry is after the "ugly
      * namespace" then all entries must follow the "ugly namespace"
      * then all entries do and we're done
