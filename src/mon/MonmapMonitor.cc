@@ -1187,6 +1187,42 @@ bool MonmapMonitor::prepare_command(MonOpRequestRef op)
       ceph_assert(okay == true);
     }
     request_proposal(mon.osdmon());
+  } else if (prefix == "mon disable_stretch_mode") {
+    if (!mon.osdmon()->is_writeable()) {
+      dout(10) << __func__
+        << ":  waiting for osdmon writeable for stretch mode" << dendl;
+      mon.osdmon()->wait_for_writeable(op, new Monitor::C_RetryMessage(&mon, op));
+      return false;  /* do not propose, yet */
+    }
+    if (!pending_map.stretch_mode_enabled) {
+      ss << "stretch mode is not engaged";
+      err = -EINVAL;
+      goto reply_no_propose;
+    }
+    if (pending_map.degraded_stretch_mode) {
+      ss << "stretch mode is currently degraded";
+      err = -EINVAL;
+      goto reply_no_propose;
+    }
+    if (pending_map.recovering_stretch_mode) {
+      ss << "stretch mode is currently recovering";
+      err = -EINVAL;
+      goto reply_no_propose;
+    }
+    pending_map.stretch_mode_enabled = false;
+    pending_map.tiebreaker_mon.clear();
+    pending_map.disallowed_leaders.clear();
+    pending_map.last_changed = ceph_clock_now();
+    // OSDMap
+    // stretch_mode_bucket
+    // stretch_mode_enabled
+    for (const auto pool& : mon.osdmon()->osdmap->get_pools()) {
+      pool->peering_crush_bucket_count = 0;
+      pool->peering_crush_bucket_target = 0;
+      pool->peering_crush_bucket_barrier = 0;
+      pool->peering_crush_mandatory_member = CRUSH_ITEM_NONE;
+    }
+    request_proposal(mon.osdmon());
   } else {
     ss << "unknown command " << prefix;
     err = -EINVAL;
