@@ -538,7 +538,7 @@ void KernelDevice::_discard_update_threads()
 
   uint64_t oldcount = discard_threads.size();
   uint64_t newcount = cct->_conf.get_val<uint64_t>("bdev_async_discard_threads");
-  if (!cct->_conf.get_val<bool>("bdev_enable_discard") || !support_discard || discard_stop) {
+  if (!cct->_conf.get_val<bool>("bdev_enable_discard") || !support_discard) {
     newcount = 0;
   }
 
@@ -571,10 +571,19 @@ void KernelDevice::_discard_update_threads()
 void KernelDevice::_discard_stop()
 {
   dout(10) << __func__ << dendl;
-
-  discard_stop = true;
-  _discard_update_threads();
-  discard_drain();
+  {
+    std::unique_lock l(discard_lock);
+    while (discard_threads.empty()) {
+      discard_cond.wait(l);
+    }
+    for(auto &t : discard_threads) {
+      t->stop = true;
+    }
+    discard_cond.notify_all();
+  }
+  for(auto &t : discard_threads)
+    t->join();
+  discard_threads.clear();
 
   dout(10) << __func__ << " stopped" << dendl;
 }
