@@ -12,6 +12,9 @@
   of the column showing the state of a group snapshot in the unformatted CLI
   output is changed from 'STATUS' to 'STATE'. The state of a group snapshot
   that was shown as 'ok' is now shown as 'complete', which is more descriptive.
+* Ceph: MGR's always-on modulues/plugins can now be force-disabled. This can be
+  necessary in cases where MGR(s) needs to be prevented from being flooded by
+  the module commands when coresponding Ceph service is down/degraded.
 
 >=19.0.0
 
