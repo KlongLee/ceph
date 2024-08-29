@@ -147,7 +147,7 @@ export abstract class PageHelper {
    */
   private waitDataTableToLoad() {
     cy.get('cd-table').should('exist');
-    cy.get('cds-table table tbody').should('exist');
+    cy.get('table[cdstable] tbody').should('exist');
     cy.contains('Loading').should('not.exist');
   }
 
