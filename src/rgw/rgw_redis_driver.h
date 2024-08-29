@@ -14,6 +14,7 @@ using boost::redis::config;
 using boost::redis::connection;
 using boost::redis::request;
 using boost::redis::response;
+using boost::redis::ignore_t;
 
 class RedisDriver : public CacheDriver {
   public:
@@ -38,6 +39,7 @@ class RedisDriver : public CacheDriver {
     virtual int del(const DoutPrefixProvider* dpp, const std::string& key, optional_yield y) override;
     virtual int append_data(const DoutPrefixProvider* dpp, const::std::string& key, const bufferlist& bl_data, optional_yield y) override;
     virtual int delete_data(const DoutPrefixProvider* dpp, const::std::string& key, optional_yield y) override;
+    virtual int rename(const DoutPrefixProvider* dpp, const::std::string& oldKey, const::std::string& newKey, optional_yield y) override;
     virtual int set_attrs(const DoutPrefixProvider* dpp, const std::string& key, const rgw::sal::Attrs& attrs, optional_yield y) override;
     virtual int get_attrs(const DoutPrefixProvider* dpp, const std::string& key, rgw::sal::Attrs& attrs, optional_yield y) override;
     virtual int update_attrs(const DoutPrefixProvider* dpp, const std::string& key, const rgw::sal::Attrs& attrs, optional_yield y) override;
@@ -53,8 +55,8 @@ class RedisDriver : public CacheDriver {
     uint64_t outstanding_write_size;
 
     struct redis_response {
-      boost::redis::request req;
-      boost::redis::response<std::string> resp;
+      request req;
+      boost::redis::generic_response resp;
     };
 
     struct redis_aio_handler { 
@@ -72,7 +74,7 @@ class RedisDriver : public CacheDriver {
 
         /* Only append data for GET call */
         if (s->req.payload().find("HGET") != std::string::npos) {
-	  r.data.append(std::get<0>(s->resp).value());
+	  r.data.append((s->resp).value().at(0).value);
         }
 
 	throttle->put(r);
