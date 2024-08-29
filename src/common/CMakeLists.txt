@@ -225,6 +225,7 @@ elseif(HAVE_POWER8)
     list(APPEND crc32_srcs
       crc32c_ppc_asm.S
       crc32c_ppc_fast_zero_asm.S)
+    #set_source_files_properties(crc32c_ppc_asm.S PROPERTIES COMPILE_FLAGS -D__ASSEMBLY__)
   endif(HAVE_PPC64LE)
 elseif(HAVE_ARMV8_CRC)
   list(APPEND crc32_srcs
@@ -236,7 +237,11 @@ elseif(HAVE_S390X)
   )
 endif(HAVE_INTEL)
 
-add_library(crc32 OBJECT ${crc32_srcs})
+if(HAVE_POWER8)
+  add_library(crc32 STATIC ${crc32_srcs})
+else()
+  add_library(crc32 OBJECT ${crc32_srcs})
+endif()
 
 if(HAVE_ARMV8_CRC)
   set_target_properties(crc32 PROPERTIES
