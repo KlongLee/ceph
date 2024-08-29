@@ -50,6 +50,8 @@ export class ServiceFormComponent extends CdForm implements OnInit {
   readonly SNMP_ENGINE_ID_PATTERN = /^[0-9A-Fa-f]{10,64}/g;
   readonly INGRESS_SUPPORTED_SERVICE_TYPES = ['rgw', 'nfs'];
   readonly SMB_CONFIG_URI_PATTERN = /^(http:|https:|rados:|rados:mon-config-key:)/;
+  readonly OAUTH2_HTTPS_ADDRES_PATTERN = /^((\d{1,3}\.){3}\d{1,3}|([a-zA-Z0-9-_]+\.)*[a-zA-Z0-9-_]+)/;
+  readonly OAUTH2_HTTPS_PORT_PATTERN = /^(6553[0-5]|655[0-2]\d|65[0-4]\d{2}|6[0-4]\d{3}|[1-5]\d{4}|\d{1,4})$/;
   @ViewChild(NgbTypeahead, { static: false })
   typeahead: NgbTypeahead;
 
@@ -324,6 +326,14 @@ export class ServiceFormComponent extends CdForm implements OnInit {
               ssl: true
             },
             [Validators.required, CdValidators.pemCert()]
+          ),
+          CdValidators.composeIf(
+            {
+              service_type: 'oauth2-proxy',
+              unmanaged: false,
+              ssl: true
+            },
+            [Validators.required, CdValidators.sslCert()]
           )
         ]
       ],
@@ -333,6 +343,14 @@ export class ServiceFormComponent extends CdForm implements OnInit {
           CdValidators.composeIf(
             {
               service_type: 'iscsi',
+              unmanaged: false,
+              ssl: true
+            },
+            [Validators.required, CdValidators.sslPrivKey()]
+          ),
+          CdValidators.composeIf(
+            {
+              service_type: 'oauth2-proxy',
               unmanaged: false,
               ssl: true
             },
@@ -421,7 +439,58 @@ export class ServiceFormComponent extends CdForm implements OnInit {
         ]
       ],
       grafana_port: [null, [CdValidators.number(false)]],
-      grafana_admin_password: [null]
+      grafana_admin_password: [null],
+      // oauth2-proxy
+      provider_display_name: [
+        'My OIDC provider',
+        [
+          CdValidators.requiredIf({
+            service_type: 'oauth2-proxy'
+          })
+        ]
+      ],
+      client_id: [
+        null,
+        [
+          CdValidators.requiredIf({
+            service_type: 'oauth2-proxy'
+          })
+        ]
+      ],
+      client_secret: [
+        null,
+        [
+          CdValidators.requiredIf({
+            service_type: 'oauth2-proxy'
+          })
+        ]
+      ],
+      oidc_issuer_url: [
+        null,
+        [
+          CdValidators.requiredIf({
+            service_type: 'oauth2-proxy'
+          })
+        ]
+      ],
+      https_address: [
+        null,
+        [
+          CdValidators.custom('httpsAddressPattern', (value: string) => {
+            if (_.isEmpty(value)) {
+              return false;
+            }
+            if (!value.includes(':')) {
+              return true;
+            }
+            const [address, port] = value.split(':');
+            const addressTest = this.OAUTH2_HTTPS_ADDRES_PATTERN.test(address);
+            const portTest = this.OAUTH2_HTTPS_PORT_PATTERN.test(port);
+            return !(addressTest && portTest);
+          })
+        ]
+      ],
+      redirect_url: [null]
     });
   }
 
@@ -619,6 +688,22 @@ export class ServiceFormComponent extends CdForm implements OnInit {
                 .get('grafana_admin_password')
                 .setValue(response[0].spec.initial_admin_password);
               break;
+            case 'oauth2-proxy':
+              const oauth2SpecKeys = [
+                'https_address',
+                'provider_display_name',
+                'client_id',
+                'client_secret',
+                'oidc_issuer_url',
+                'redirect_url'
+              ];
+              oauth2SpecKeys.forEach((key) => {
+                this.serviceForm.get(key).setValue(response[0].spec[key]);
+              });
+              if (response[0].spec?.ssl) {
+                this.serviceForm.get('ssl_cert').setValue(response[0].spec?.ssl_cert);
+                this.serviceForm.get('ssl_key').setValue(response[0].spec?.ssl_key);
+              }
           }
         });
     }
@@ -683,6 +768,7 @@ export class ServiceFormComponent extends CdForm implements OnInit {
       case 'jaeger-collector':
       case 'jaeger-query':
       case 'smb':
+      case 'oauth2-proxy':
         this.serviceForm.get('count').setValue(1);
         break;
       default:
@@ -1016,6 +1102,19 @@ export class ServiceFormComponent extends CdForm implements OnInit {
         case 'grafana':
           serviceSpec['port'] = values['grafana_port'];
           serviceSpec['initial_admin_password'] = values['grafana_admin_password'];
+          break;
+        case 'oauth2-proxy':
+          serviceSpec['provider_display_name'] = values['provider_display_name']?.trim();
+          serviceSpec['client_id'] = values['client_id']?.trim();
+          serviceSpec['client_secret'] = values['client_secret']?.trim();
+          serviceSpec['oidc_issuer_url'] = values['oidc_issuer_url']?.trim();
+          serviceSpec['https_address'] = values['https_address']?.trim();
+          serviceSpec['redirect_url'] = values['redirect_url']?.trim();
+          if (values['ssl']) {
+            serviceSpec['ssl_cert'] = values['ssl_cert']?.trim();
+            serviceSpec['ssl_key'] = values['ssl_key']?.trim();
+          }
+          break;
       }
     }
 
