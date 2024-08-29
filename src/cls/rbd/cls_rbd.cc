@@ -4624,6 +4624,7 @@ static const std::string STATUS_GLOBAL_KEY_PREFIX("status_global_");
 static const std::string REMOTE_STATUS_GLOBAL_KEY_PREFIX("remote_status_global_");
 static const std::string INSTANCE_KEY_PREFIX("instance_");
 static const std::string MIRROR_IMAGE_MAP_KEY_PREFIX("image_map_");
+static const std::string REMOTE_NAMESPACE("remote_namespace");
 
 std::string peer_key(const std::string &uuid) {
   return PEER_KEY_PREFIX + uuid;
@@ -5923,6 +5924,41 @@ int mirror_mode_set(cls_method_context_t hctx, bufferlist *in,
   }
   return 0;
 }
+
+int mirror_namespace_get(cls_method_context_t hctx, bufferlist *in,
+                         bufferlist *out) {
+  std::string mirror_ns_decode;
+  int r = read_key(hctx, mirror::REMOTE_NAMESPACE, &mirror_ns_decode);
+  if (r < 0) {
+    CLS_ERR("error getting mirror namespace: %s", cpp_strerror(r).c_str());
+    return r;
+  }
+
+  encode(mirror_ns_decode, *out);
+  return 0;
+}
+
+int mirror_namespace_set(cls_method_context_t hctx, bufferlist *in,
+                         bufferlist *out) {
+  std::string mirror_namespace;
+  try {
+    auto bl_it = in->cbegin();
+    decode(mirror_namespace, bl_it);
+  } catch (const ceph::buffer::error &err) {
+    return -EINVAL;
+  }
+
+  bufferlist bl;
+  encode(mirror_namespace, bl);
+
+  int r = cls_cxx_map_set_val(hctx, mirror::REMOTE_NAMESPACE, &bl);
+  if (r < 0) {
+    CLS_ERR("error setting mirror namespace: %s", cpp_strerror(r).c_str());
+    return r;
+  }
+  return 0;
+}
+
 
 /**
  * Input:
@@ -8278,6 +8314,8 @@ CLS_INIT(rbd)
   cls_method_handle_t h_mirror_uuid_set;
   cls_method_handle_t h_mirror_mode_get;
   cls_method_handle_t h_mirror_mode_set;
+  cls_method_handle_t h_mirror_namespace_get;
+  cls_method_handle_t h_mirror_namespace_set;
   cls_method_handle_t h_mirror_peer_ping;
   cls_method_handle_t h_mirror_peer_list;
   cls_method_handle_t h_mirror_peer_add;
@@ -8575,6 +8613,11 @@ CLS_INIT(rbd)
   cls_register_cxx_method(h_class, "mirror_mode_set",
                           CLS_METHOD_RD | CLS_METHOD_WR,
                           mirror_mode_set, &h_mirror_mode_set);
+  cls_register_cxx_method(h_class, "mirror_namespace_get", CLS_METHOD_RD,
+                          mirror_namespace_get, &h_mirror_namespace_get);
+  cls_register_cxx_method(h_class, "mirror_namespace_set",
+                          CLS_METHOD_RD | CLS_METHOD_WR,
+                          mirror_namespace_set, &h_mirror_namespace_set);
   cls_register_cxx_method(h_class, "mirror_peer_ping",
                           CLS_METHOD_RD | CLS_METHOD_WR,
                           mirror_peer_ping, &h_mirror_peer_ping);

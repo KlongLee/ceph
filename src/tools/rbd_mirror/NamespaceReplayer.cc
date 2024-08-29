@@ -36,7 +36,8 @@ const std::string SERVICE_DAEMON_REMOTE_COUNT_KEY("image_remote_count");
 
 template <typename I>
 NamespaceReplayer<I>::NamespaceReplayer(
-    const std::string &name,
+    const std::string &local_name,
+    const std::string &remote_name,
     librados::IoCtx &local_io_ctx, librados::IoCtx &remote_io_ctx,
     const std::string &local_mirror_uuid,
     const std::string& local_mirror_peer_uuid,
@@ -47,7 +48,8 @@ NamespaceReplayer<I>::NamespaceReplayer(
     ServiceDaemon<I> *service_daemon,
     journal::CacheManagerHandler *cache_manager_handler,
     PoolMetaCache* pool_meta_cache) :
-  m_namespace_name(name),
+  m_local_namespace_name(local_name),
+  m_remote_namespace_name(remote_name),
   m_local_mirror_uuid(local_mirror_uuid),
   m_local_mirror_peer_uuid(local_mirror_peer_uuid),
   m_remote_pool_meta(remote_pool_meta),
@@ -57,16 +59,16 @@ NamespaceReplayer<I>::NamespaceReplayer(
   m_cache_manager_handler(cache_manager_handler),
   m_pool_meta_cache(pool_meta_cache),
   m_lock(ceph::make_mutex(librbd::util::unique_lock_name(
-      "rbd::mirror::NamespaceReplayer " + name, this))),
+      "rbd::mirror::NamespaceReplayer " + local_name, this))),
   m_local_pool_watcher_listener(this, true),
   m_remote_pool_watcher_listener(this, false),
   m_image_map_listener(this) {
-  dout(10) << name << dendl;
+  dout(10) << remote_name << "," << local_name << dendl;
 
   m_local_io_ctx.dup(local_io_ctx);
-  m_local_io_ctx.set_namespace(name);
+  m_local_io_ctx.set_namespace(local_name);
   m_remote_io_ctx.dup(remote_io_ctx);
-  m_remote_io_ctx.set_namespace(name);
+  m_remote_io_ctx.set_namespace(remote_name);
 }
 
 template <typename I>
