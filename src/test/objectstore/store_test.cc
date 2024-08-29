@@ -1686,6 +1686,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
   if(string(GetParam()) != "bluestore")
     return;
   SetVal(g_conf(), "bluestore_block_db_path", "");
+  SetVal(g_conf(), "bluestore_rocksdb_options_annex", "compression=kNoCompression");
   StartDeferred(65536);
   SetVal(g_conf(), "bluestore_compression_mode", "force");
   SetVal(g_conf(), "bluestore_max_blob_size", "524288");
@@ -1696,7 +1697,8 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
   int r;
 
   int poolid = 4373;
-  coll_t cid = coll_t(spg_t(pg_t(0, poolid), shard_id_t::NO_SHARD));
+  spg_t pgid(spg_t(pg_t(0, poolid), shard_id_t::NO_SHARD));
+  coll_t cid = coll_t(pgid);
   ghobject_t hoid(hobject_t(sobject_t("Object 1", CEPH_NOSNAP),
                             string(),
 			    0,
@@ -1704,11 +1706,10 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
 			    string()));
   ghobject_t hoid2 = hoid;
   hoid2.hobj.snap = 1;
-  {
-    auto ch = store->open_collection(cid);
-    ASSERT_FALSE(ch);
-  }
+  ghobject_t pgmeta_oid(pgid.make_pgmeta_oid());
+
   auto ch = store->create_new_collection(cid);
+  ceph_assert(ch);
   {
     ObjectStore::Transaction t;
     t.create_collection(cid, 0);
@@ -1751,6 +1752,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
     EXPECT_EQ(store->mount(), 0);
     ch = store->open_collection(cid);
+    ceph_assert(ch);
   }
   {
     ObjectStore::Transaction t;
@@ -1795,6 +1797,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
     EXPECT_EQ(store->mount(), 0);
     ch = store->open_collection(cid);
+    ceph_assert(ch);
   }
   {
     ObjectStore::Transaction t;
@@ -1830,6 +1833,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
     EXPECT_EQ(store->mount(), 0);
     ch = store->open_collection(cid);
+    ceph_assert(ch);
   }
   {
     ObjectStore::Transaction t;
@@ -1863,6 +1867,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
     EXPECT_EQ(store->mount(), 0);
     ch = store->open_collection(cid);
+    ceph_assert(ch);
   }
   {
     ObjectStore::Transaction t;
@@ -1899,6 +1904,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
     EXPECT_EQ(store->mount(), 0);
     ch = store->open_collection(cid);
+    ceph_assert(ch);
   }
   {
     ObjectStore::Transaction t;
@@ -1936,6 +1942,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
     EXPECT_EQ(store->mount(), 0);
     ch = store->open_collection(cid);
+    ceph_assert(ch);
   }
   {
     ObjectStore::Transaction t;
@@ -1967,6 +1974,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
     EXPECT_EQ(store->mount(), 0);
     ch = store->open_collection(cid);
+    ceph_assert(ch);
   }
   {
     ObjectStore::Transaction t;
@@ -2004,6 +2012,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
     EXPECT_EQ(store->mount(), 0);
     ch = store->open_collection(cid);
+    ceph_assert(ch);
   }
   {
     struct store_statfs_t statfs;
@@ -2040,6 +2049,79 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ASSERT_EQ(statfs2_pool.data_compressed_allocated,
       statfs_pool.data_compressed_allocated);
   }
+  {
+    ObjectStore::Transaction t;
+    ObjectStore::Transaction t2;
+    coll_t meta_cid = coll_t::meta();
+    ghobject_t meta_hoid(hobject_t(sobject_t(object_t("metaobj"), 0)));
+    std::string s(0x10000, 'c');
+    bufferlist bl;
+    bl.append(s);
+    map<string, bufferlist> km;
+    km["k1"] = bl;
+    km["key2"] = bl;
+
+    cerr << "Write to meta object" << std::endl;
+    auto meta_ch = store->create_new_collection(meta_cid);
+    ceph_assert(meta_ch);
+    t.create_collection(coll_t::meta(), 0);
+    t.write(meta_cid, meta_hoid, 0, bl.length(), bl);
+    t.omap_setkeys(meta_cid, meta_hoid, km);
+    r = queue_transaction(store, meta_ch, std::move(t));
+    ASSERT_EQ(r, 0);
+
+    cerr << "Write to pgmeta object" << std::endl;
+    km["key3"] = bl;
+    t2.touch(cid, pgmeta_oid);
+    t2.omap_setkeys(cid, pgmeta_oid, km);
+    r = queue_transaction(store, ch, std::move(t2));
+    ASSERT_EQ(r, 0);
+
+    // very basic testing for meta pool stats
+    bool per_pool_omap;
+    struct store_statfs_t statfs_meta_pool;
+    r = store->pool_statfs(META_POOL_ID, &statfs_meta_pool, &per_pool_omap);
+    ASSERT_EQ(r, 0);
+    cerr << "before umount: " << statfs_meta_pool << std::endl;
+    ASSERT_EQ(statfs_meta_pool.data_stored, bl.length());
+    ASSERT_EQ(statfs_meta_pool.allocated, bl.length());
+
+    //force fsck
+    ch.reset();
+    meta_ch.reset();
+    EXPECT_EQ(store->umount(), 0);
+    ASSERT_EQ(store->fsck(false), 0); // do fsck explicitly
+    EXPECT_EQ(store->mount(), 0);
+    ch = store->open_collection(cid);
+    ceph_assert(ch);
+
+    struct store_statfs_t statfs_meta_pool2;
+    r = store->pool_statfs(META_POOL_ID, &statfs_meta_pool2, &per_pool_omap);
+    ASSERT_EQ(r, 0);
+    cerr << "after mount: " << statfs_meta_pool2 << std::endl;
+    ASSERT_GE(statfs_meta_pool2.omap_allocated, 2 * bl.length());
+    ASSERT_GE(statfs_meta_pool2.internal_metadata, 3 * bl.length());
+
+    // reset omap estimations as they're not provided before umount
+    statfs_meta_pool.omap_allocated = statfs_meta_pool2.omap_allocated = 0;
+    statfs_meta_pool.internal_metadata = statfs_meta_pool2.internal_metadata = 0;
+    ASSERT_EQ(statfs_meta_pool, statfs_meta_pool2);
+
+    // Now cleaning meta col
+    t = ObjectStore::Transaction();
+    meta_ch = store->open_collection(meta_cid);
+    ceph_assert(meta_ch);
+    t.remove(meta_cid, meta_hoid);
+    t.remove_collection(meta_cid);
+    r = queue_transaction(store, meta_ch, std::move(t));
+    ASSERT_EQ(r, 0);
+    meta_ch.reset();
+
+    t2 = ObjectStore::Transaction();
+    t2.remove(cid, pgmeta_oid);
+    r = queue_transaction(store, ch, std::move(t2));
+    ASSERT_EQ(r, 0);
+  }
 
   {
     // verify no
@@ -2051,6 +2133,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
 			      poolid2,
 			      string()));
     auto ch = store->create_new_collection(cid2);
+    ceph_assert(ch);
 
     {
 
@@ -2088,6 +2171,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
       statfs1_pool_again.available = statfs1_pool.available;
       ASSERT_EQ(statfs1_pool_again, statfs1_pool);
 
+      // Now cleaning cid2
       t = ObjectStore::Transaction();
       t.remove(cid2, hoid);
       t.remove_collection(cid2);
@@ -2110,6 +2194,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
     ghobject_t hoid3_temp;
     hoid3_temp.hobj = hoid3.hobj.make_temp_hobject("Object 3 temp");
     auto ch3 = store->create_new_collection(cid3);
+    ceph_assert(ch3);
     {
       struct store_statfs_t statfs1_pool;
       bool per_pool_omap;
@@ -2151,7 +2236,9 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
       EXPECT_EQ(store->umount(), 0);
       EXPECT_EQ(store->mount(), 0);
       ch = store->open_collection(cid);
+      ceph_assert(ch);
       ch3 = store->open_collection(cid3);
+      ceph_assert(ch3);
 
       t = ObjectStore::Transaction();
       t.collection_move_rename(
@@ -2171,8 +2258,11 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
       EXPECT_EQ(store->umount(), 0);
       EXPECT_EQ(store->mount(), 0);
       ch = store->open_collection(cid);
+      ceph_assert(ch);
       ch3 = store->open_collection(cid3);
+      ceph_assert(ch3);
 
+      // Now cleaning cid3
       t = ObjectStore::Transaction();
       t.remove(cid3, hoid3);
       t.remove_collection(cid3);
@@ -2183,6 +2273,7 @@ TEST_P(StoreTestSpecificAUSize, BluestoreStatFSTest) {
   }
 
   {
+    // Now cleaning everything
     ObjectStore::Transaction t;
     t.remove(cid, hoid);
     t.remove(cid, hoid2);

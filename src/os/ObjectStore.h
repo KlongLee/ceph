@@ -60,6 +60,9 @@ typedef uint32_t osflagbits_t;
 const int SKIP_JOURNAL_REPLAY = 1 << 0;
 const int SKIP_MOUNT_OMAP = 1 << 1;
 
+// "META" pool id
+#define META_POOL_ID ((uint64_t)-1ull)
+
 class ObjectStore {
 protected:
   std::string path;

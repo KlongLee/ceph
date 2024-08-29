@@ -234,7 +234,6 @@ enum {
   l_bluestore_last
 };
 
-#define META_POOL_ID ((uint64_t)-1ull)
 using bptr_c_it_t = buffer::ptr::const_iterator;
 
 class BlueStore : public ObjectStore,
