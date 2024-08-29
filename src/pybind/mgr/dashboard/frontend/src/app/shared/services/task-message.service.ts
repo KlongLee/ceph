@@ -515,22 +515,18 @@ export class TaskMessageService {
   }
 
   nvmeofSubsystem(metadata: any) {
-    return $localize`subsystem '${metadata.nqn}'`;
+    return $localize`Subsystem '${metadata.nqn}'`;
   }
 
   nvmeofListener(metadata: any) {
-    return $localize`listener '${metadata.host_name} for subsystem ${metadata.nqn}`;
+    return $localize`Listener '${metadata.host_name} for Subsystem ${metadata.nqn}`;
   }
 
   nvmeofNamespace(metadata: any) {
     if (metadata?.nsid) {
-      return $localize`namespace ${metadata.nsid} for subsystem '${metadata.nqn}'`;
+      return $localize`Namespace ${metadata.nsid} for Subsystem '${metadata.nqn}'`;
     }
-    return $localize`namespace for subsystem '${metadata.nqn}'`;
-  }
-
-  nvmeofInitiator(metadata: any) {
-    return $localize`initiator${metadata?.plural ? 's' : ''} for subsystem ${metadata.nqn}`;
+    return $localize`Namespace for Subsystem '${metadata.nqn}'`;
   }
 
   nfs(metadata: any) {
