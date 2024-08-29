@@ -57,7 +57,7 @@
     "@carbon/styles": "1.57.0",
     "@circlon/angular-tree-component": "10.0.0",
     "@ibm/plex": "6.4.0",
-    "@ng-bootstrap/ng-bootstrap": "14.2.0",
+    "@ng-bootstrap/ng-bootstrap": "17.0.1",
     "@ngx-formly/bootstrap": "6.1.1",
     "@ngx-formly/core": "6.1.1",
     "@popperjs/core": "2.10.2",
