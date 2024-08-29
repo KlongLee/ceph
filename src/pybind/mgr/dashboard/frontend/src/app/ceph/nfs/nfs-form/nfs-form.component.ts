@@ -4,6 +4,7 @@ import {
   AsyncValidatorFn,
   UntypedFormControl,
   ValidationErrors,
+  ValidatorFn,
   Validators
 } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -129,7 +130,7 @@ export class NfsFormComponent extends CdForm implements OnInit {
     if (this.router.url.startsWith(`/${getPathfromFsal(this.storageBackend)}/nfs/edit`)) {
       this.isEdit = true;
     }
-
+    
     if (this.isEdit) {
       this.action = this.actionLabels.EDIT;
       this.route.params.subscribe(
@@ -181,11 +182,19 @@ export class NfsFormComponent extends CdForm implements OnInit {
   }
 
   volumeChangeHandler() {
-    this.pathChangeHandler();
-    const fs_name = this.nfsForm.getValue('fsal').fs_name;
+   const fs_name = this.nfsForm.getValue('fsal').fs_name;
+    const subvolgrp = this.nfsForm.getValue('subvolume_group');
     this.getSubVolGrp(fs_name);
-  }
+    this.getSubVol();
 
+    if(subvolgrp == this.defaultSubVolGroup){
+      this.updatePath('/volumes/' + this.defaultSubVolGroup);
+      this.setUpVolumeValidation();
+    } else {
+      this.updatePath('');
+    }
+  }
+  
   async getSubVol() {
     const fs_name = this.nfsForm.getValue('fsal').fs_name;
     const subvolgrp = this.nfsForm.getValue('subvolume_group');
@@ -197,6 +206,7 @@ export class NfsFormComponent extends CdForm implements OnInit {
     ).subscribe((data: any) => {
       this.allsubvols = data;
     });
+    this.setUpVolumeValidation();
   }
 
   getSubVolGrp(fs_name: string) {
@@ -213,7 +223,7 @@ export class NfsFormComponent extends CdForm implements OnInit {
       if (subvolGroup === this.defaultSubVolGroup) {
         this.updatePath('/volumes/' + this.defaultSubVolGroup);
         resolve();
-      } else {
+      } else if(subvolGroup != ''){
         this.subvolgrpService
           .info(fs_name, subvolGroup)
           .pipe(map((data) => data['path']))
@@ -224,6 +234,10 @@ export class NfsFormComponent extends CdForm implements OnInit {
             },
             (error) => reject(error)
           );
+      }
+      else {
+        this.updatePath('');
+        this.setUpVolumeValidation();
       }
     });
   }
@@ -249,7 +263,6 @@ export class NfsFormComponent extends CdForm implements OnInit {
 
   updatePath(path: string) {
     this.nfsForm.patchValue({ path: path });
-    this.pathChangeHandler();
   }
 
   createForm() {
@@ -258,8 +271,8 @@ export class NfsFormComponent extends CdForm implements OnInit {
       cluster_id: new UntypedFormControl('', {
         validators: [Validators.required]
       }),
-      path: new UntypedFormControl('/', {
-        validators: [Validators.required]
+      path: new UntypedFormControl('', {
+        validators: [Validators.required, this.isolatedSlashValidator()]
       }),
       protocolNfsv3: new UntypedFormControl(true, {
         validators: [
@@ -324,7 +337,7 @@ export class NfsFormComponent extends CdForm implements OnInit {
       }),
 
       // CephFS-specific fields
-      subvolume_group: new UntypedFormControl(''),
+      subvolume_group: new UntypedFormControl(this.defaultSubVolGroup),
       subvolume: new UntypedFormControl(''),
       sec_label_xattr: new UntypedFormControl(
         'security.selinux',
@@ -339,6 +352,19 @@ export class NfsFormComponent extends CdForm implements OnInit {
         })
       )
     });
+  }
+
+  setUpVolumeValidation() {
+   const subvolumeGroupControl= this.nfsForm.get('subvolume_group').value;
+      const subVolumeControl = this.nfsForm.get('subvolume');
+
+      if(subvolumeGroupControl == '_nogroup'){
+        subVolumeControl?.setValidators([Validators.required]);
+      }
+      else {
+        subVolumeControl?.clearValidators();
+      }
+      subVolumeControl?.updateValueAndValidity();
   }
 
   resolveModel(res: any) {
@@ -475,6 +501,17 @@ export class NfsFormComponent extends CdForm implements OnInit {
     this.defaultAccessType[name] = accessType;
   }
 
+  isolatedSlashValidator(): ValidatorFn {
+    return (control: AbstractControl): ValidationErrors | null => {
+      const path = control.value as string;
+
+      if(path === '/') {
+        return {isolatedSlash: true};
+      }
+    return null;
+    };
+  }
+
   setPathValidation() {
     const path = this.nfsForm.get('path');
     if (this.storageBackend === SUPPORTED_FSAL.RGW) {
@@ -521,13 +558,6 @@ export class NfsFormComponent extends CdForm implements OnInit {
     );
   }
 
-  pathChangeHandler() {
-    if (!this.isEdit) {
-      this.nfsForm.patchValue({
-        pseudo: this.generatePseudo()
-      });
-    }
-  }
 
   private getBucketTypeahead(path: string): Observable<any> {
     if (_.isString(path) && path !== '/' && path !== '') {
@@ -544,23 +574,6 @@ export class NfsFormComponent extends CdForm implements OnInit {
     }
   }
 
-  private generatePseudo() {
-    const pseudoControl = this.nfsForm.get('pseudo');
-    let newPseudo = pseudoControl?.dirty && this.nfsForm.getValue('pseudo');
-
-    if (!newPseudo) {
-      const path = this.nfsForm.getValue('path');
-      newPseudo = `/${getPathfromFsal(this.storageBackend)}`;
-
-      if (_.isString(path) && !_.isEmpty(path)) {
-        newPseudo += '/' + path;
-      } else if (!_.isEmpty(this.nfsForm.getValue('fsal').user_id)) {
-        newPseudo += '/' + this.nfsForm.getValue('fsal').user_id;
-      }
-    }
-
-    return newPseudo;
-  }
 
   submitAction() {
     let action: Observable<any>;
