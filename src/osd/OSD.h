@@ -1444,6 +1444,7 @@ private:
 
   void _add_heartbeat_peer(int p);
   void _remove_heartbeat_peer(int p);
+  std::string _get_loc_by_subtree(int id, std::string subtree);
   bool heartbeat_reset(Connection *con);
   void maybe_update_heartbeat_peers();
   void reset_heartbeat_peers(bool all);
