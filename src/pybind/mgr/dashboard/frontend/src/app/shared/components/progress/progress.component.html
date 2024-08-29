@@ -1,0 +1,61 @@
+<div class="d-flex flex-column justify-content-center align-items-center bold">
+  <ng-container>
+    <h3 class="text-center"
+        [ngClass]="{ 'mt-3': inProgress && isPaused }">
+      <i *ngIf="inProgress && isPaused; else spinningIcon"
+         [ngClass]="[icons.large, icons.spinner]"></i>
+      <ng-template #spinningIcon>
+        <i [ngClass]="[icons.large, icons.spin, icons.spinner]"></i>
+      </ng-template>
+    </h3>
+
+    <h3 class="text-center"
+        [ngClass]="inProgress && isPaused ? ['mt-3', 'mb-4'] : 'mt-2'"
+        *ngIf="description">
+      {{ description }}
+    </h3>
+
+    <h5 class="text-center mt-3"
+        *ngIf="currentStep && inProgress && !isPaused">
+      {{ currentStep }}
+    </h5>
+
+    <h5 class="text-center mt-3"
+        *ngIf="executingTaskName">
+      {{ executingTaskName }}
+    </h5>
+  </ng-container>
+
+  <div class="w-50 row h-100 d-flex justify-content-center align-items-center mt-4">
+    <div class="text-center w-75">
+      <ng-container *ngIf="stepsCompleted && stepsCompleted.length > 0"
+                    i18n>
+          Finished {{ stepsAction }}:
+        <span class="text-success">
+            {{ stepsCompleted }}
+        </span>
+      </ng-container>
+
+      <!-- Progress Bar -->
+      <div class="mt-2">
+        <ngb-progressbar type="info"
+                         [value]="progress"
+                         [striped]="true"
+                         [animation]="!isPaused"></ngb-progressbar>
+      </div>
+      <p class="card-text text-muted">
+        <span class="float-end">{{ progress || 0 }} %</span>
+      </p>
+    </div>
+
+    <h4 class="text-center m-2"
+        *ngIf="progressText">
+      {{ progressText }}
+    </h4>
+
+    <h5 class="text-center mt-2"
+        *ngIf="message">
+      {{ message }}
+    </h5>
+  </div>
+</div>
