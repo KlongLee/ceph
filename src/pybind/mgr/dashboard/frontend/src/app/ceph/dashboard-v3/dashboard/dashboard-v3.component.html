@@ -70,7 +70,7 @@
         <cd-card-row [data]="healthData.hosts"
                      link="/hosts"
                      title="Host"
-                     summaryType="simplified"
+                     summaryType="host"
                      *ngIf="healthData.hosts != null"
                      [dropdownData]="(isHardwareEnabled$ | async) && (hardwareSummary$ | async)">
         </cd-card-row>
