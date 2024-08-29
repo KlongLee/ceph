@@ -128,6 +128,11 @@ things to do:
 
   That prevents any clients from establishing new sessions with the MDS.
 
+* **Dont tweak max_mds** Changing value of ``max_mds`` FS setting variable is
+  often wrongly perceived as a good measure to take to help the recovery or
+  troubleshooting effort. But it actually can be bad idea since it not only
+  won't be helpful but, instead, might further destabilize the system.
+
 
 
 Expediting MDS journal trim

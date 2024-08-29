@@ -110,8 +110,7 @@ class FailHandler : public FileSystemCommandHandler
 
   bool confirm = false;
   cmd_getval(cmdmap, "yes_i_really_mean_it", confirm);
-  if (!confirm &&
-      mon->mdsmon()->has_health_warnings({
+  if (!confirm && mon->mdsmon()->has_one_of_these_health_warnings({
 	MDS_HEALTH_TRIM, MDS_HEALTH_CACHE_OVERSIZED})) {
     ss << errmsg_for_unhealthy_mds;
     return -EPERM;
@@ -384,6 +383,17 @@ public:
     if (!cmd_getval(cmdmap, "val", val)) {
       return -EINVAL;
     }
+
+  bool confirm = false;
+  cmd_getval(cmdmap, "yes_i_really_mean_it", confirm);
+  if (var == "max_mds" && !confirm && mon->mdsmon()->has_health_warnings()) {
+    ss << "One or more file system health warnings are present. Modifying "
+       << "the file system setting variable \"max_mds\" will not help "
+       << "troubleshoot or recover from these warnings and may further "
+       << "destabilize the system. If you really wish to proceed, run "
+       << "again with --yes-i-really-mean-it";
+    return -EPERM;
+  }
 
     return set_val(mon, fsmap, op, cmdmap, ss, fsp->get_fscid(), var, val);
   }

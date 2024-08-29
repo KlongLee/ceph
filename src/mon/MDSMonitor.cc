@@ -1540,7 +1540,7 @@ out:
   }
 }
 
-bool MDSMonitor::has_health_warnings(vector<mds_metric_t> warnings)
+bool MDSMonitor::has_one_of_these_health_warnings(vector<mds_metric_t> warnings)
 {
   for (auto& [gid, health] : pending_daemon_health) {
     for (auto& metric : health.metrics) {
@@ -1554,6 +1554,16 @@ bool MDSMonitor::has_health_warnings(vector<mds_metric_t> warnings)
     }
   }
 
+  return false;
+}
+
+bool MDSMonitor::has_health_warnings()
+{
+  for (auto& [gid, health] : pending_daemon_health) {
+    if (health.metrics.size() > 0) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -1615,8 +1625,8 @@ int MDSMonitor::filesystem_command(
       return -EPERM;
     }
 
-    if (!confirm &&
-        has_health_warnings({MDS_HEALTH_TRIM, MDS_HEALTH_CACHE_OVERSIZED})) {
+    if (!confirm && has_one_of_these_health_warnings({
+	  MDS_HEALTH_TRIM, MDS_HEALTH_CACHE_OVERSIZED})) {
       ss << errmsg_for_unhealthy_mds;
       return -EPERM;
     }
