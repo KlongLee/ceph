@@ -35,6 +35,8 @@ struct onode_layout_t {
   omap_root_le_t xattr_root;
 
   object_data_le_t object_data;
+  local_object_id_le_t local_object_id{LOCAL_OBJECT_ID_NULL};
+  uint8_t offset_bits{std::numeric_limits<uint8_t>::max()};
 
   char oi[MAX_OI_LENGTH];
   char ss[MAX_SS_LENGTH];
@@ -54,21 +56,22 @@ class Onode : public boost::intrusive_ref_counter<
   boost::thread_unsafe_counter>
 {
 protected:
-  virtual laddr_t get_hint() const = 0;
-  const uint32_t default_metadata_offset = 0;
-  const uint32_t default_metadata_range = 0;
+  virtual laddr_hint_t get_onode_data_hint(
+    std::optional<local_object_id_t> id,
+    uint16_t offset_bits) const = 0;
+  virtual laddr_hint_t get_onode_metadata_hint(
+    std::optional<local_object_id_t> id) const = 0;
+
   const hobject_t hobj;
 public:
-  Onode(uint32_t ddr, uint32_t dmr, const hobject_t &hobj)
-    : default_metadata_offset(ddr),
-      default_metadata_range(dmr),
-      hobj(hobj)
-  {}
+  explicit Onode(const hobject_t &hobj) : hobj(hobj) {}
 
   virtual bool is_alive() const = 0;
   virtual const onode_layout_t &get_layout() const = 0;
   virtual ~Onode() = default;
 
+  virtual void update_local_object_id(Transaction&, local_object_id_t) = 0;
+  virtual void update_offset_bits(Transaction&) = 0;
   virtual void update_onode_size(Transaction&, uint32_t) = 0;
   virtual void update_omap_root(Transaction&, omap_root_t&) = 0;
   virtual void update_xattr_root(Transaction&, omap_root_t&) = 0;
@@ -78,15 +81,27 @@ public:
   virtual void clear_object_info(Transaction&) = 0;
   virtual void clear_snapset(Transaction&) = 0;
 
-  laddr_t get_metadata_hint(uint64_t block_size) const {
-    assert(default_metadata_offset);
-    assert(default_metadata_range);
-    uint64_t range_blocks = default_metadata_range / block_size;
-    return get_hint() + default_metadata_offset +
-      (((uint32_t)std::rand() % range_blocks) * block_size);
+  // local object id doesn't use all of 32 bits internally,
+  // LOCAL_OBJECT_ID_NULL means this onode doesn't have
+  // local object id yet.
+  std::optional<local_object_id_t> get_local_object_id() const {
+    std::optional<local_object_id_t> id = std::nullopt;
+    if (auto loid = local_object_id_t(get_layout().local_object_id);
+        loid != LOCAL_OBJECT_ID_NULL) {
+      id = loid;
+    }
+    return id;
   }
-  laddr_t get_data_hint() const {
-    return get_hint();
+
+  laddr_hint_t get_metadata_hint() const {
+    return get_onode_metadata_hint(get_local_object_id());
+  }
+  laddr_hint_t get_data_hint(int offset_bits) const {
+    auto &layout = get_layout();
+    ceph_assert(layout.offset_bits == std::numeric_limits<uint8_t>::max() ||
+                // TODO: it's possible to change offset bits at runtime in the future.
+                offset_bits == (int)layout.offset_bits);
+    return get_onode_data_hint(get_local_object_id(), offset_bits);
   }
   friend std::ostream& operator<<(std::ostream &out, const Onode &rhs);
 };

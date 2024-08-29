@@ -36,13 +36,8 @@ struct FLTreeOnode final : Onode, Value {
   FLTreeOnode& operator=(const FLTreeOnode&) = delete;
 
   template <typename... T>
-  FLTreeOnode(uint32_t ddr, uint32_t dmr, const hobject_t &hobj, T&&... args)
-    : Onode(ddr, dmr, hobj),
-      Value(std::forward<T>(args)...) {}
-
-  template <typename... T>
   FLTreeOnode(const hobject_t &hobj, T&&... args)
-    : Onode(0, 0, hobj),
+    : Onode(hobj),
       Value(std::forward<T>(args)...) {}
 
   struct Recorder : public ValueDeltaRecorder {
@@ -50,6 +45,8 @@ struct FLTreeOnode final : Onode, Value {
       UPDATE_ONODE_SIZE,
       UPDATE_OMAP_ROOT,
       UPDATE_XATTR_ROOT,
+      UPDATE_LOCAL_OBJECT_ID,
+      UPDATE_OFFSET_BITS,
       UPDATE_OBJECT_DATA,
       UPDATE_OBJECT_INFO,
       UPDATE_SNAPSET,
@@ -66,7 +63,7 @@ struct FLTreeOnode final : Onode, Value {
     void apply_value_delta(
       ceph::bufferlist::const_iterator &bliter,
       NodeExtentMutable &value,
-      laddr_t value_addr) final;
+      laddr_offset_t value_addr_offset) final;
 
     void encode_update(NodeExtentMutable &payload_mut, delta_op_t op);
   };
@@ -104,6 +101,23 @@ struct FLTreeOnode final : Onode, Value {
     });
   }
 
+  void update_local_object_id(Transaction &t, local_object_id_t id) final {
+    with_mutable_layout(
+      t,
+      [id, this](NodeExtentMutable &payload_mut, Recorder *recorder) {
+        maybe_update_local_object_id(payload_mut, recorder, id);
+      });
+  }
+
+  void update_offset_bits(Transaction& t) final {
+    auto offset_bits = t.get_offset_bits();
+    with_mutable_layout(
+      t,
+      [offset_bits, this](NodeExtentMutable &payload_mut, Recorder *recorder) {
+        maybe_update_offset_bits(payload_mut, recorder, offset_bits);
+      });
+  }
+
   void update_onode_size(Transaction &t, uint32_t size) final {
     with_mutable_layout(
       t,
@@ -121,9 +135,13 @@ struct FLTreeOnode final : Onode, Value {
   void update_omap_root(Transaction &t, omap_root_t &oroot) final {
     with_mutable_layout(
       t,
-      [&oroot](NodeExtentMutable &payload_mut, Recorder *recorder) {
+      [&oroot, this](NodeExtentMutable &payload_mut, Recorder *recorder) {
 	auto &mlayout = *reinterpret_cast<onode_layout_t*>(
           payload_mut.get_write());
+        if (oroot.addr != L_ADDR_NULL) {
+          maybe_update_local_object_id(
+            payload_mut, recorder, oroot.addr.get_local_object_id());
+        }
 	mlayout.omap_root.update(oroot);
 	if (recorder) {
 	  recorder->encode_update(
@@ -135,9 +153,13 @@ struct FLTreeOnode final : Onode, Value {
   void update_xattr_root(Transaction &t, omap_root_t &xroot) final {
     with_mutable_layout(
       t,
-      [&xroot](NodeExtentMutable &payload_mut, Recorder *recorder) {
+      [&xroot, this](NodeExtentMutable &payload_mut, Recorder *recorder) {
 	auto &mlayout = *reinterpret_cast<onode_layout_t*>(
 	  payload_mut.get_write());
+        if (xroot.addr != L_ADDR_NULL) {
+          maybe_update_local_object_id(
+            payload_mut, recorder, xroot.addr.get_local_object_id());
+        }
 	mlayout.xattr_root.update(xroot);
 	if (recorder) {
 	  recorder->encode_update(
@@ -149,9 +171,16 @@ struct FLTreeOnode final : Onode, Value {
   void update_object_data(Transaction &t, object_data_t &odata) final {
     with_mutable_layout(
       t,
-      [&odata](NodeExtentMutable &payload_mut, Recorder *recorder) {
+      [&t, &odata, this](NodeExtentMutable &payload_mut, Recorder *recorder) {
 	auto &mlayout = *reinterpret_cast<onode_layout_t*>(
           payload_mut.get_write());
+        if (!odata.is_null()) {
+          maybe_update_local_object_id(
+            payload_mut,
+            recorder,
+            odata.get_reserved_data_base().get_local_object_id());
+        }
+        maybe_update_offset_bits(payload_mut, recorder, t.get_offset_bits());
 	mlayout.object_data.update(odata);
 	if (recorder) {
 	  recorder->encode_update(
@@ -227,13 +256,55 @@ struct FLTreeOnode final : Onode, Value {
     });
   }
 
+  void maybe_update_local_object_id(
+    NodeExtentMutable &payload_mut,
+    Recorder *recorder,
+    local_object_id_t id) {
+    auto &mlayout = *reinterpret_cast<onode_layout_t*>(
+      payload_mut.get_write());
+    local_object_id_t layout_id = mlayout.local_object_id;
+    if (layout_id == LOCAL_OBJECT_ID_NULL) {
+      mlayout.local_object_id = id;
+      if (recorder) {
+        recorder->encode_update(
+          payload_mut, Recorder::delta_op_t::UPDATE_LOCAL_OBJECT_ID);
+      }
+    } else {
+      ceph_assert(id == layout_id);
+    }
+  }
+
+  void maybe_update_offset_bits(
+    NodeExtentMutable &payload_mut,
+    Recorder *recorder,
+    uint16_t offset_bits) {
+    auto &mlayout = *reinterpret_cast<onode_layout_t*>(
+      payload_mut.get_write());
+    uint8_t layout_ob = mlayout.offset_bits;
+    if (layout_ob == std::numeric_limits<uint8_t>::max()) {
+      mlayout.offset_bits = offset_bits;
+      if (recorder) {
+        recorder->encode_update(
+          payload_mut, Recorder::delta_op_t::UPDATE_OFFSET_BITS);
+      }
+    } else {
+      ceph_assert(offset_bits == layout_ob);
+    }
+  }
+
   void mark_delete() {
     assert(status != status_t::DELETED);
     status = status_t::DELETED;
   }
 
-  laddr_t get_hint() const final {
-    return Value::get_hint();
+  laddr_hint_t get_onode_data_hint(
+    std::optional<local_object_id_t> id,
+    uint16_t offset_bits) const final {
+    return Value::get_onode_data_hint(id, offset_bits);
+  }
+  laddr_hint_t get_onode_metadata_hint(
+    std::optional<local_object_id_t> id) const final {
+    return Value::get_onode_metadata_hint(id);
   }
   ~FLTreeOnode() final {}
 };
@@ -246,16 +317,11 @@ class FLTreeOnodeManager : public crimson::os::seastore::OnodeManager {
   OnodeTree tree;
 
   uint32_t default_data_reservation = 0;
-  uint32_t default_metadata_offset = 0;
-  uint32_t default_metadata_range = 0;
 public:
   FLTreeOnodeManager(TransactionManager &tm) :
     tree(NodeExtentManager::create_seastore(tm)),
     default_data_reservation(
-      get_conf<uint64_t>("seastore_default_max_object_size")),
-    default_metadata_offset(default_data_reservation),
-    default_metadata_range(
-      get_conf<uint64_t>("seastore_default_object_metadata_reservation"))
+      get_conf<uint64_t>("seastore_default_max_object_size"))
   {}
 
   mkfs_ret mkfs(Transaction &t) {
@@ -287,6 +353,10 @@ public:
     const ghobject_t& start,
     const ghobject_t& end,
     uint64_t limit) final;
+
+  get_latest_snap_and_head_ret get_latest_snap_and_head(
+    Transaction &trans,
+    const ghobject_t &head) final;
 
   ~FLTreeOnodeManager();
 };

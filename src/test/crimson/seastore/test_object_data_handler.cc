@@ -13,7 +13,6 @@ using namespace crimson::os::seastore;
 
 #define MAX_OBJECT_SIZE (16<<20)
 #define DEFAULT_OBJECT_DATA_RESERVATION (16<<20)
-#define DEFAULT_OBJECT_METADATA_RESERVATION (16<<20)
 
 namespace {
   [[maybe_unused]] seastar::logger& logger() {
@@ -26,7 +25,7 @@ class TestOnode final : public Onode {
   bool dirty = false;
 
 public:
-  TestOnode(uint32_t ddr, uint32_t dmr) : Onode(ddr, dmr, hobject_t()) {}
+  TestOnode() : Onode(hobject_t()) {}
   const onode_layout_t &get_layout() const final {
     return layout;
   }
@@ -38,7 +37,20 @@ public:
     return true;
   }
   bool is_dirty() const { return dirty; }
-  laddr_t get_hint() const final {return L_ADDR_MIN; }
+  laddr_hint_t get_onode_data_hint(std::optional<local_object_id_t>, uint16_t) const final {
+    laddr_hint_t hint;
+    hint.addr = L_ADDR_MIN;
+    hint.collide_on_local_object_id();
+    hint.set_gen_random_policy();
+    return hint;
+  }
+  laddr_hint_t get_onode_metadata_hint(std::optional<local_object_id_t>) const final {
+    laddr_hint_t hint;
+    hint.addr = L_ADDR_MIN;
+    hint.collide_on_local_object_id();
+    hint.set_gen_random_policy();
+    return hint;
+  }
   ~TestOnode() final = default;
 
   void update_onode_size(Transaction &t, uint32_t size) final {
@@ -62,6 +74,18 @@ public:
   void update_object_data(Transaction &t, object_data_t &odata) final {
     with_mutable_layout(t, [&odata](onode_layout_t &mlayout) {
       mlayout.object_data.update(odata);
+    });
+  }
+
+  void update_local_object_id(Transaction &t, local_object_id_t id) final {
+    with_mutable_layout(t, [id](onode_layout_t &mlayout) {
+      mlayout.local_object_id = id;
+    });
+  }
+
+  void update_offset_bits(Transaction &t) final {
+    with_mutable_layout(t, [&t](onode_layout_t &mlayout) {
+      mlayout.offset_bits = t.get_offset_bits();
     });
   }
 
@@ -218,19 +242,19 @@ struct object_data_handler_test_t:
     objaddr_t offset,
     extent_len_t length) {
     auto ret = with_trans_intr(t, [&](auto &t) {
-      return tm->get_pins(t, offset, length);
+      return tm->get_pins(t, laddr_t::from_byte_offset(offset), length);
     }).unsafe_get();
     return ret;
   }
   std::list<LBAMappingRef> get_mappings(objaddr_t offset, extent_len_t length) {
     auto t = create_mutate_transaction();
     auto ret = with_trans_intr(*t, [&](auto &t) {
-      return tm->get_pins(t, offset, length);
+      return tm->get_pins(t, laddr_t::from_byte_offset(offset), length);
     }).unsafe_get();
     return ret;
   }
 
-  using remap_entry = TransactionManager::remap_entry;
+  using remap_entry_t = TransactionManager::remap_entry_t;
   LBAMappingRef remap_pin(
     Transaction &t,
     LBAMappingRef &&opin,
@@ -239,7 +263,7 @@ struct object_data_handler_test_t:
     auto pin = with_trans_intr(t, [&](auto& trans) {
       return tm->remap_pin<ObjectDataBlock>(
         trans, std::move(opin), std::array{
-          remap_entry(new_offset, new_len)}
+          remap_entry_t(new_offset, new_len)}
       ).si_then([](auto ret) {
         return std::move(ret[0]);
       });
@@ -263,9 +287,7 @@ struct object_data_handler_test_t:
   }
 
   seastar::future<> set_up_fut() final {
-    onode = new TestOnode(
-      DEFAULT_OBJECT_DATA_RESERVATION,
-      DEFAULT_OBJECT_METADATA_RESERVATION);
+    onode = new TestOnode();
     known_contents = buffer::create(4<<20 /* 4MB */);
     memset(known_contents.c_str(), 0, known_contents.length());
     size = 0;
@@ -297,7 +319,7 @@ struct object_data_handler_test_t:
       "seastore_max_data_allocation_size", "8192").get();
   }
 
-  laddr_t get_random_laddr(size_t block_size, laddr_t limit) {
+  objaddr_t get_random_write_offset(size_t block_size, objaddr_t limit) {
     return block_size *
       std::uniform_int_distribution<>(0, (limit / block_size) - 1)(gen);
   }
@@ -632,7 +654,7 @@ TEST_P(object_data_handler_test_t, remap_left) {
     auto base = pins.front()->get_key();
     int i = 0;
     for (auto &pin : pins) {
-      EXPECT_EQ(pin->get_key() - base, res[i]);
+      EXPECT_EQ(pin->get_key().get_byte_distance<size_t>(base), res[i]);
       i++;
     }
     read(0, 128<<10);
@@ -666,7 +688,7 @@ TEST_P(object_data_handler_test_t, remap_right) {
     auto base = pins.front()->get_key();
     int i = 0;
     for (auto &pin : pins) {
-      EXPECT_EQ(pin->get_key() - base, res[i]);
+      EXPECT_EQ(pin->get_key().get_byte_distance<size_t>(base), res[i]);
       i++;
     }
     read(0, 128<<10);
@@ -699,7 +721,7 @@ TEST_P(object_data_handler_test_t, remap_right_left) {
     auto base = pins.front()->get_key();
     int i = 0;
     for (auto &pin : pins) {
-      EXPECT_EQ(pin->get_key() - base, res[i]);
+      EXPECT_EQ(pin->get_key().get_byte_distance<size_t>(base), res[i]);
       i++;
     }
     enable_max_extent_size();
@@ -730,7 +752,7 @@ TEST_P(object_data_handler_test_t, multiple_remap) {
     auto base = pins.front()->get_key();
     int i = 0;
     for (auto &pin : pins) {
-      EXPECT_EQ(pin->get_key() - base, res[i]);
+      EXPECT_EQ(pin->get_key().get_byte_distance<size_t>(base), res[i]);
       i++;
     }
     read(0, 128<<10);
@@ -769,7 +791,7 @@ TEST_P(object_data_handler_test_t, random_overwrite) {
       for (unsigned j = 0; j < 100; ++j) {
 	auto t = create_mutate_transaction();
 	for (unsigned k = 0; k < 2; ++k) {
-	  write(*t, get_random_laddr(BSIZE, TOTAL), wsize,
+	  write(*t, get_random_write_offset(BSIZE, TOTAL), wsize,
 	    (char)((j*k) % std::numeric_limits<char>::max()));
 	}
 	submit_transaction(std::move(t));
@@ -798,7 +820,7 @@ TEST_P(object_data_handler_test_t, overwrite_then_read_within_transaction) {
       auto pins = get_mappings(*t, base, len);
       assert(pins.size() == 1);
       auto pin1 = remap_pin(*t, std::move(pins.front()), 4096, 8192);
-      auto ext = get_extent(*t, base + 4096, 4096 * 2);
+      auto ext = get_extent(*t, laddr_t::from_byte_offset(base + 4096), 4096 * 2);
       ASSERT_TRUE(ext->is_exist_clean());
       write(*t, base + 4096, 4096, 'y');
       ASSERT_TRUE(ext->is_exist_mutation_pending());

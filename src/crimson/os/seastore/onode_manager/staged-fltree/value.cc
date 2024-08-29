@@ -82,9 +82,19 @@ Value::do_prepare_mutate_payload(Transaction& t)
    return p_cursor->prepare_mutate_value_payload(get_context(t));
 }
 
-laddr_t Value::get_hint() const
+laddr_hint_t Value::get_onode_data_hint(
+  std::optional<local_object_id_t> id,
+  uint16_t offset_bits) const
 {
-  return p_cursor->get_key_view(vb.get_header_magic()).get_hint();
+  return p_cursor->get_key_view(vb.get_header_magic())
+      .get_onode_data_hint(id, offset_bits);
+}
+
+laddr_hint_t Value::get_onode_metadata_hint(
+  std::optional<local_object_id_t> id) const
+{
+  return p_cursor->get_key_view(vb.get_header_magic())
+      .get_onode_metadata_hint(id);
 }
 
 std::unique_ptr<ValueDeltaRecorder>
@@ -138,7 +148,7 @@ void validate_tree_config(const tree_conf_t& conf)
 #define _STAGE_T(NodeType) node_to_stage_t<typename NodeType::node_stage_t>
 #define NXT_T(StageType)  staged<typename StageType::next_param_t>
 
-    laddr_t i_value{0};
+    laddr_t i_value = L_ADDR_MIN;
     auto insert_size_2 =
       _STAGE_T(InternalNode0)::insert_size(key, i_value);
     auto insert_size_0 =
