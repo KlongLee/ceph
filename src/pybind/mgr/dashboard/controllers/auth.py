@@ -163,6 +163,8 @@ class Auth(RESTController, ControllerAuthMixin):
         redirect_url = '#/login'
         if mgr.SSO_DB.protocol == 'saml2':
             redirect_url = 'auth/saml2/slo'
+        elif mgr.SSO_DB.protocol == 'oauth2':
+            redirect_url = 'auth/oauth2/logout'
         return {
             'redirect_url': redirect_url
         }
@@ -170,6 +172,8 @@ class Auth(RESTController, ControllerAuthMixin):
     def _get_login_url(self):
         if mgr.SSO_DB.protocol == 'saml2':
             return 'auth/saml2/login'
+        elif mgr.SSO_DB.protocol == 'oauth2':
+            return 'auth/oauth2/login'
         return '#/login'
 
     @RESTController.Collection('POST', query_params=['token'])
@@ -183,7 +187,7 @@ class Auth(RESTController, ControllerAuthMixin):
                 return {
                     'username': user.username,
                     'permissions': user.permissions_dict(),
-                    'sso': mgr.SSO_DB.protocol == 'saml2',
+                    'sso': mgr.SSO_DB.protocol == 'saml2' or 'oauth2',
                     'pwdUpdateRequired': user.pwd_update_required
                 }
         return {
