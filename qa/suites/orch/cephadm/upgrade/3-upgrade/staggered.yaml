@@ -131,7 +131,12 @@ tasks:
       - ceph orch upgrade start --image quay.ceph.io/ceph-ci/ceph:$sha1 --services rgw.foo
       - while ceph orch upgrade status | jq '.in_progress' | grep true && ! ceph orch upgrade status | jq '.message' | grep Error ; do ceph orch ps ; ceph versions ; ceph orch upgrade status ; sleep 30 ; done
       - ceph orch ps
+      - ceph versions
       # verify all rgw daemons on same version and version hash matches what we are upgrading to
+      # wait a bit first as ceph versions seems to be a bit slower getting the rgw daemons' versions
+      - sleep 10
+      - ceph orch ps
+      - ceph versions
       - ceph versions | jq -e '.rgw | length == 1'
       - ceph versions | jq -e '.rgw | keys' | grep $sha1
       - ceph orch upgrade status
